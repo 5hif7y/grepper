@@ -134,7 +134,7 @@ recorded here as such.
 | #3178 | `--json` summary statistics wrong | printer | fixed |
 | #3179 | absolute paths with a global gitignore | ignore | fixed (`--ignore-file` and the global gitignore) |
 | #3593 | `-v -m N -A k` prints the rest of the input as matches | searcher | does not apply: 14.1.1 prints the issue's case right (`1:a 2:b 3-foo`); the bug came with 15.x. `tests/line_paths.py` holds grepper to the behaviour the issue expects |
-| #3581 #1764 | `-g !DIRNAME/` does not match when the working directory is `DIRNAME` | globs | todo |
+| #3581 #1764 | `-g !DIRNAME/` does not match when the working directory is `DIRNAME` | globs | fixed |
 | #3605 #3604 | an ignore file stops being read at an invalid UTF-8 line | ignore | already: grepper reads the lines after it, with no message, as 16.0.0 |
 | #3527 | a lone `!` line in a gitignore is not a no-op | ignore | fixed |
 | #3477 | trailing spaces in gitignore patterns are parsed wrongly | ignore | fixed |

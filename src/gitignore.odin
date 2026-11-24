@@ -295,7 +295,12 @@ candidate_bytes :: proc(p: string) -> []u8 {
 
 gitignore_matched :: proc(g: ^Gitignore, path: string, is_dir: bool) -> Verdict {
 	if gitignore_is_empty(g) { return .None }
-	return gitignore_matched_stripped(g, gitignore_strip(g, path), is_dir)
+	// the root itself strips to nothing; it is matched whole, so that an unanchored `dir/`
+	// can match it (fix over 14.1.1, ripgrep 16.0.0's #3581: -g '!dir/' run from inside dir
+	// on a path above it kept dir)
+	stripped := gitignore_strip(g, path)
+	if stripped == "" { stripped = path }
+	return gitignore_matched_stripped(g, stripped, is_dir)
 }
 
 gitignore_matched_stripped :: proc(g: ^Gitignore, path: string, is_dir: bool) -> Verdict {

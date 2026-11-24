@@ -358,7 +358,8 @@ TREE_CASES = [
 # right answer as `expect`: either other rg arguments that ask the same question without
 # hitting the bug (("rg", [args, ...]), their outputs concatenated), or (rc, stdout). rg is
 # run on the case too: if it gives the right answer, the case no longer shows the bug, and
-# that is reported as a failure, so every case keeps documenting a real difference.
+# that is reported as a failure, so every case keeps documenting a real difference. An "rg"
+# answer may name a third item, the directory to run it from.
 # (name, bug, args, directory under fixtures or "", sorted, expect)
 RG_BUGS = [
     ("not-equal property", "B1", ["-o", "-n", "\\p{sc!=Greek}+", "words.txt"], "", False,
@@ -432,6 +433,10 @@ RG_BUGS = [
     # with no path, its paths made absolute
     ("ignore file anchored, absolute root", "U3179", ["--files", "--ignore-file", os.path.join(FIX, "tree5", "anchor.ignore"), os.path.join(FIX, "tree5", "a")], "tree5/a/b/c", True,
      (0, os.path.join(FIX, "tree5", "a", "b", "c", "other").encode() + b"\n")),
+    # -g '!cls/' from inside cls, on the tree above: the walk meets cls as the glob's root,
+    # which rg 14.1.1 strips to nothing and keeps; the answer is the search run from tree5
+    ("glob dir from inside it", "U3581", ["--files", "--no-ignore", "-g", "!cls/", os.path.join(FIX, "tree5")], "tree5/cls", True,
+     ("rg", [["--files", "--no-ignore", "-g", "!cls/", os.path.join(FIX, "tree5")]], "tree5")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it
@@ -648,7 +653,8 @@ def main():
         fixed_total += 1
         cwd = os.path.join(FIX, sub) if sub else FIX
         if expect[0] == "rg":
-            outs = [run(a.rg, x, ["-j1"], cwd) for x in expect[1]]
+            ref_cwd = os.path.join(FIX, expect[2]) if len(expect) > 2 else cwd
+            outs = [run(a.rg, x, ["-j1"], ref_cwd) for x in expect[1]]
             want = (0 if any(o[0] == 0 for o in outs) else outs[0][0], b"".join(normalize(o[1]) for o in outs))
         else:
             want = expect

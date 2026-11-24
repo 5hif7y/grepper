@@ -209,6 +209,10 @@ walk_dir :: proc(w: ^Walker, ig: ^Ignore_Node, dir: string, depth: int) {
 			delete(path)
 			continue
 		}
+		if !is_dir && !e.size_ok && !e.is_link && h.max_filesize != nil {
+			// a lister that gives no size (readdir): stat only when --max-filesize needs it
+			if fi, err := os.stat(path, context.temp_allocator); err == nil { size = u64(max(fi.size, 0)) }
+		}
 		if !is_dir {
 			if mf, has := h.max_filesize.?; has && size > mf {
 				delete(path)

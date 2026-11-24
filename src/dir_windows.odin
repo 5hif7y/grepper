@@ -28,6 +28,7 @@ Dir_Entry :: struct {
 	is_link: bool,     // a symlink or a junction (Rust's is_symlink on Windows): not followed
 	is_hidden: bool,   // FILE_ATTRIBUTE_HIDDEN: hidden to ripgrep on Windows, as a leading '.'
 	size:    u64,
+	size_ok: bool,     // always true: FindNextFileW gives the size
 }
 
 list_dir :: proc(dir: string, allocator := context.allocator) -> (out: [dynamic]Dir_Entry, ok: bool) {
@@ -51,7 +52,7 @@ list_dir :: proc(dir: string, allocator := context.allocator) -> (out: [dynamic]
 			dir := a & win32.FILE_ATTRIBUTE_DIRECTORY != 0
 			append(&out, Dir_Entry{name = name, is_dir = dir && !link, is_file = !dir && !link, is_link = link,
 			                       is_hidden = a & win32.FILE_ATTRIBUTE_HIDDEN != 0,
-			                       size = u64(data.nFileSizeHigh) << 32 | u64(data.nFileSizeLow)})
+			                       size = u64(data.nFileSizeHigh) << 32 | u64(data.nFileSizeLow), size_ok = true})
 		}
 		if !win32.FindNextFileW(h, &data) { break }
 	}

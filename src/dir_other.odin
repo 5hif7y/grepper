@@ -2,33 +2,56 @@
 #+build !windows
 package grepper
 
-import "core:os"
+import "core:strings"
+import "core:sys/posix"
 
 Dir_Entry :: struct {
-	name:    string,
-	is_dir:  bool,
-	is_file: bool,
-	is_link: bool,
+	name:      string,
+	is_dir:    bool,
+	is_file:   bool,
+	is_link:   bool,
 	is_hidden: bool,   // always false: on Unix only the leading '.' hides
-	size:    u64,
+	size:      u64,
+	size_ok:   bool,   // false: not read (the walk stats the file when it needs the size)
 }
 
-// A directory's entries through Odin's os.read_directory (to be measured against ripgrep on
-// Linux as the Windows reader was).
+// A directory's entries from opendir/readdir alone, as walkdir reads them: the name and the
+// type readdir gives (d_type), with no stat per entry; only when the file system leaves the
+// type unknown is the entry lstat'ed. Odin's os.read_directory stats every entry, which made
+// a walk of /usr/share (26,398 files) take 352 ms where rg -j1 takes 72.
 list_dir :: proc(dir: string, allocator := context.allocator) -> (out: [dynamic]Dir_Entry, ok: bool) {
-	infos, err := os.read_all_directory_by_path(dir, allocator)
-	if err != nil { return out, false }
-	defer os.file_info_slice_delete(infos, allocator)
-	for fi in infos {
-		append(&out, Dir_Entry{name = strings_clone(fi.name, allocator), is_dir = fi.type == .Directory,
-		                       is_file = fi.type == .Regular, is_link = fi.type == .Symlink, size = u64(max(fi.size, 0))})
+	cdir := strings.clone_to_cstring(dir, context.temp_allocator)
+	d := posix.opendir(cdir)
+	if d == nil { return out, false }
+	defer posix.closedir(d)
+	out = make([dynamic]Dir_Entry, allocator)
+	for {
+		e := posix.readdir(d)
+		if e == nil { break }
+		name := string(cstring(raw_data(e.d_name[:])))
+		if name == "." || name == ".." { continue }
+		ent := Dir_Entry{name = strings.clone(name, allocator)}
+		t := e.d_type
+		if t == .UNKNOWN {
+			path := strings.clone_to_cstring(path_join_tmp(dir, name), context.temp_allocator)
+			st: posix.stat_t
+			if posix.lstat(path, &st) == .OK {
+				switch {
+				case posix.S_ISDIR(st.st_mode): t = .DIR
+				case posix.S_ISREG(st.st_mode): t = .REG
+				case posix.S_ISLNK(st.st_mode): t = .LNK
+				}
+				ent.size, ent.size_ok = u64(max(st.st_size, 0)), true
+			}
+		}
+		ent.is_dir, ent.is_file, ent.is_link = t == .DIR, t == .REG, t == .LNK
+		append(&out, ent)
 	}
 	return out, true
 }
 
 @(private = "file")
-strings_clone :: proc(s: string, allocator := context.allocator) -> string {
-	b := make([]u8, len(s), allocator)
-	copy(b, s)
-	return string(b)
+path_join_tmp :: proc(dir, name: string) -> string {
+	if len(dir) > 0 && dir[len(dir) - 1] == '/' { return strings.concatenate({dir, name}, context.temp_allocator) }
+	return strings.concatenate({dir, "/", name}, context.temp_allocator)
 }

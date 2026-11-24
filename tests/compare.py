@@ -770,17 +770,27 @@ def main():
             print(f"  rg      rc={r[0]} {r[1][:400]!r}")
     total = sum(1 for n, *_ in cases if a.k in n)
     print(f"{total - bad}/{total} cases match rg")
-    # the walked cases again with grepper walking and searching on 4 threads: the file order
-    # is then not fixed (as in ripgrep), so the lines are compared sorted
+    # every case again with grepper on 4 threads, against rg on one: the file order is then
+    # not fixed, so the lines are compared sorted. Not only walks: several paths given (or
+    # stdin and a path) are searched in parallel too, and a version that searched no given
+    # file there passed the walked cases alone. rg -j4 is no reference: it loses parent
+    # rules at random with two roots (PARITY B2)
     par_bad, par_total = 0, 0
     for name, args, cwd, sort, stdin, cfg in cases:
-        if not sort or stdin is not None or cfg is not None or a.k not in name:
+        if a.k not in name:
             continue
         par_total += 1
-        g = run(a.grepper, args, ["-j4"], cwd)
-        r = run(a.rg, args, ["-j1"], cwd)
-        # -0 ends paths with NUL instead of a newline
-        split = (lambda b: sorted(b.split(b"\0"))) if "-0" in args else (lambda b: sorted(b.splitlines(True)))
+        env = None
+        if cfg is not None:
+            path = os.path.join(FIX, "rgconfig")
+            with open(path, "wb") as f:
+                f.write(cfg)
+            env = dict(ENV, RIPGREP_CONFIG_PATH=path)
+        g = run(a.grepper, args, ["-j4"], cwd, stdin, env)
+        r = run(a.rg, args, ["-j1"], cwd, stdin, env)
+        # -0 ends paths with NUL instead of a newline: records end in NUL only when nothing
+        # else ends them (--files -0); with -c a record is still a line, path NUL count
+        split = lambda b: sorted(b.splitlines(True) if b"\n" in b else b.split(b"\0"))
         g = g[0], split(normalize(g[1]))
         r = r[0], split(normalize(r[1]))
         if g != r:
@@ -789,7 +799,7 @@ def main():
             print(f"  grepper rc={g[0]} {g[1][:400]!r}")
             print(f"  rg      rc={r[0]} {r[1][:400]!r}")
     if par_total:
-        print(f"{par_total - par_bad}/{par_total} walked cases match rg with -j4")
+        print(f"{par_total - par_bad}/{par_total} cases match rg with -j4")
     bad += par_bad
     fixed_bad, fixed_total = 0, 0
     for name, bug, args, sub, sort, expect in RG_BUGS:

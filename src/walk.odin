@@ -181,6 +181,9 @@ Dir_Job :: struct {
 	ig:    ^Ignore_Node,
 	dir:   string,
 	depth: int,
+	file:  bool,       // a file to search, not a directory
+	hay:   Haystack,   // the file's haystack: a root path given (explicit, or stdin) or walked
+	owned: bool,       // hay.path's memory is the job's (a walked path), freed once searched
 }
 
 Dir_Queue :: struct {
@@ -225,6 +228,13 @@ walk_thread :: proc(w: ^Walker) {
 	for {
 		job, ok := dq_pop(w.queue)
 		if !ok { break }
+		if job.file {
+			consume(w.cons, job.hay)
+			if job.owned { delete(job.dir) }
+			free_all(context.temp_allocator)
+			dq_finish(w.queue)
+			continue
+		}
 		// job.dir is not freed: the directory's Ignore_Node keeps it as its dir, and the
 		// subdirectories queued under that node strip their paths against it after this
 		// call returns (the nodes themselves are never freed either)
@@ -239,6 +249,10 @@ walker_emit :: proc(w: ^Walker, hay: Haystack) {
 		append(&w.sorted, hay)
 	} else if w.cons != nil {
 		consume(w.cons, hay)
+	} else if w.queue != nil {
+		// a parallel walk's root files (and stdin), from the main thread, which searches
+		// nothing itself: they wait on the stack with the directories
+		dq_push(w.queue, Dir_Job{file = true, hay = hay})
 	} else {
 		chan.send(w.sh.jobs, hay)
 	}

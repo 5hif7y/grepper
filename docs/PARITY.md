@@ -139,12 +139,12 @@ recorded here as such.
 | #3527 | a lone `!` line in a gitignore is not a no-op | ignore | fixed |
 | #3477 | trailing spaces in gitignore patterns are parsed wrongly | ignore | fixed |
 | #2745 | glob character classes match the path separator | globset | fixed |
-| #3609 #3603 | partial path components accepted when stripping prefixes | paths | todo |
-| #2958 | control codes in paths are printed raw | printer | todo |
+| #3609 #3603 | partial path components accepted when stripping prefixes | paths | todo: Unix only (Windows strips by components), to reproduce on Linux |
+| #2958 | control codes in paths are printed raw | printer | todo: only when stdout or stderr is a terminal, which compare.py cannot see; needs a console harness |
 | #3484 | Scheme files are part of the Lisp type | types | fixed: 14.1.1's table with only this change (types added after 14.1.1 are not taken) |
-| #2552 | `-L` reports broken symlinks that are ignored | walk | todo |
-| #3534 | symlink loops above the search root are not detected | walk | todo |
-| #3382 | buffered matches lost after an error in a parallel search | walk | todo |
+| #2552 | `-L` reports broken symlinks that are ignored | walk | todo: this account cannot create symlinks (WinError 1314); to try with junctions or on Linux |
+| #3534 | symlink loops above the search root are not detected | walk | todo: as #2552 |
+| #3382 | buffered matches lost after an error in a parallel search | walk | todo: needs a read that fails mid-search |
 | #3617 | on Windows, stdout that is a pipe is compared against the searched files | walk | todo, with the stdout check |
 | #2094 #3076 | `-m` with `-U` shows too many matches | multiline | todo, with `-U` |
 | #3180 | `-U` with `-r` panics | multiline | todo, with `-U` |

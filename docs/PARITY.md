@@ -185,7 +185,7 @@ already ships; "NVOL: new" one to write there. The order is the order of work.
 |---|---|---|
 | P1 | literal extraction for regexes (regex-syntax's `Extractor`: prefixes, suffixes, inner literals) and regex-automata's prefilter choice, so a regex with a literal is searched by a literal kernel first | has: memchr, memchr2, memchr3, memmem, Teddy; new: Rabin-Karp for sets Teddy refuses (scalar, kept in NVOL with the rest of the family) |
 | P2 | the reverse-suffix and reverse-inner strategies (a literal found, then the regex run backwards from it) | new: reverse memmem (NVOL PENDING item 40) |
-| P3 | accelerated DFA states: a state that loops on itself except for one to three bytes skips ahead with memchr, as regex-automata does | has: memchr, memchr2, memchr3 |
+| P3 | accelerated DFA states: a state that loops on itself except for one to three bytes skips ahead with memchr. regex-automata does it in its dense DFAs, not in the lazy one, so this goes past rg | done: `^\s*$` 1686 -> 770 ms on the 523 MiB file (rg ~820) |
 | P4 | the lazy DFA in multi line mode (today `-U` runs on the PikeVM alone), and the cache size limits (`--dfa-size-limit`) | none |
 | P5 | the one-pass DFA and the bounded backtracker for capture groups (`-o`, `-r`, colours), as regex-automata's meta engine picks them | none |
 | P0 | real file input: a memory map (MapViewOfFile, mmap) where ripgrep maps, and reads of 64 KiB at a time otherwise | done: on one 523 MiB file `-l` went from 240 to 18 ms (rg 44). Open: rows that scan the whole mapped file pay its page faults (~310 ms, rg ~336); reading it whole took ~278 ms but changes binary detection, so a faster way to fault the map in (a prefetch ahead of the search) is still to try | none |

@@ -2,6 +2,7 @@
 package grepper
 
 import "core:slice"
+import nvol "nvol:odin"
 
 // A lazy DFA over the Thompson NFA, in the manner of regex-automata's hybrid DFA: states are
 // built on demand and their transitions cached. It answers the question the line searcher
@@ -25,13 +26,26 @@ DFA_UNKNOWN :: -1
 DFA_MATCH   :: -2      // a match ends where the byte would be read
 DFA_QUIT    :: -3
 DFA_NO_EOI  :: -4      // at the end: no match
-// a transition into a start state when there is a prefilter: DFA_START_TAG - target
-DFA_START_TAG :: -16
+// A transition into a state the search must act on when it enters it: DFA_TAG - (target * 2
+// + kind), kind 0 for a start state when there is a prefilter (skip with the prefilter),
+// kind 1 for an accelerated state (skip to its next escape byte).
+DFA_TAG :: -16
+
+// Acceleration, which regex-automata gives its dense DFAs and not its lazy one: a state that
+// goes back to itself on every byte but one to three "escape" bytes skips ahead to the next
+// of them with NVOL's memchr, memchr2 or memchr3. A state is checked the first time one of
+// its self-loops is computed, which computes its whole row; at most DFA_ACCEL_CHECKS states
+// per cache, and never when the row could fill the cache.
+DFA_ACCEL_CHECKS :: 64
 
 Dfa_State :: struct {
 	is_start: bool,          // no seeds: only the unanchored start's closure is alive
 	ctx:   Dfa_Ctx,
 	seeds: []i32,
+	accel_checked: bool,
+	accel_n:       int,      // escape bytes, 1 to 3 (or 0 with accel set: none at all)
+	accel:         bool,
+	escapes:       [3]u8,
 }
 
 Lazy_Dfa :: struct {
@@ -55,6 +69,7 @@ Lazy_Dfa :: struct {
 	next:         [dynamic]i32,
 	key:          [dynamic]u8,
 	budget:       int,        // states before the cache is cleared
+	accel_checks: int,        // states still to check for acceleration in this cache
 	start_ids:    [Dfa_Ctx]i32, // the start state per context once built (-1: not yet)
 }
 
@@ -64,6 +79,7 @@ dfa_new :: proc(n: ^Rx_NFA) -> (d: Lazy_Dfa) {
 	for &x in d.start_ids { x = -1 }
 	d.mark = make([]u32, len(n.states))
 	d.budget = 4096
+	d.accel_checks = DFA_ACCEL_CHECKS
 	need_start, need_lf, need_cr, need_word := false, false, false, false
 	for s in n.states {
 		if s.kind == .Look {
@@ -176,6 +192,7 @@ dfa_reset :: proc(d: ^Lazy_Dfa) {
 	for s in d.states { delete(s.seeds) }
 	clear(&d.states)
 	clear(&d.trans)
+	d.accel_checks = DFA_ACCEL_CHECKS
 	for k in d.index { delete(k) }
 	clear(&d.index)
 }
@@ -247,8 +264,58 @@ Dfa_Result :: enum { No_Match, Match, Quit }
 encode :: #force_inline proc(d: ^Lazy_Dfa, to: i32) -> i32 {
 	if to < 0 { return to }
 	base := to * DFA_STRIDE
-	if d.pre != nil && d.states[to].is_start { return DFA_START_TAG - base }
+	if d.pre != nil && d.states[to].is_start { return DFA_TAG - base * 2 }
+	if d.states[to].accel { return DFA_TAG - (base * 2 + 1) }
 	return base
+}
+
+// whether state sid loops on all but at most three bytes; if so it becomes accelerated, and
+// every transition into it is tagged. The row is computed in full on the way.
+@(private="file")
+check_accel :: proc(d: ^Lazy_Dfa, sid: i32) {
+	st := &d.states[sid]
+	st.accel_checked = true
+	if d.accel_checks <= 0 || len(d.states) + DFA_STRIDE > d.budget { return }
+	if d.pre != nil && st.is_start { return }
+	d.accel_checks -= 1
+	base := int(sid) * DFA_STRIDE
+	escapes: [3]u8
+	n := 0
+	for b in 0 ..< 256 {
+		t := d.trans[base + b]
+		if t == DFA_UNKNOWN {
+			// no reset can happen: the cache has room for the whole row
+			to, _ := compute(d, sid, b)
+			t = encode(d, to)
+			d.trans[base + b] = t
+		}
+		if t == i32(base) { continue }
+		if n == 3 { return }
+		escapes[n] = u8(b)
+		n += 1
+	}
+	st = &d.states[sid]
+	st.accel, st.accel_n, st.escapes = true, n, escapes
+	tagged := DFA_TAG - (i32(base) * 2 + 1)
+	for &t in d.trans {
+		if t == i32(base) { t = tagged }
+	}
+}
+
+// in an accelerated state at i: the next escape byte, or the end
+@(private="file")
+accel_skip :: #force_inline proc(d: ^Lazy_Dfa, h: []u8, i: int, cur, end: int) -> int {
+	st := &d.states[cur / DFA_STRIDE]
+	hay := h[i:end]
+	k: int
+	ok: bool
+	switch st.accel_n {
+	case 0: return end
+	case 1: k, ok = nvol.memchr(st.escapes[0], hay)
+	case 2: k, ok = nvol.memchr2(st.escapes[0], st.escapes[1], hay)
+	case: k, ok = nvol.memchr3(st.escapes[0], st.escapes[1], st.escapes[2], hay)
+	}
+	return i + k if ok else end
 }
 
 // in a start state at i: the prefilter skips to where a match may start (find_fwd_imp). A
@@ -286,18 +353,30 @@ dfa_find_earliest :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r
 		b := int(h[i])
 		next := d.trans[cur + b]
 		if next == DFA_UNKNOWN {
-			to, reset := compute(d, i32(cur / DFA_STRIDE), b)
+			sid := i32(cur / DFA_STRIDE)
+			to, reset := compute(d, sid, b)
 			next = encode(d, to)
 			// after a reset of the cache the state at cur is gone
-			if !reset { d.trans[cur + b] = next }
+			if !reset {
+				d.trans[cur + b] = next
+				if to == sid && !d.states[sid].accel_checked {
+					check_accel(d, sid)
+					next = d.trans[cur + b]
+				}
+			}
 		}
 		switch {
 		case next == DFA_MATCH: return i, .Match
 		case next == DFA_QUIT: return i, .Quit
-		case next <= DFA_START_TAG:
-			cur = int(DFA_START_TAG - next)
+		case next <= DFA_TAG:
+			v := int(DFA_TAG - next)
+			cur = v >> 1
 			i += 1
-			if i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
+			if v & 1 == 0 {
+				if i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
+			} else if i < end {
+				i = accel_skip(d, h, i, cur, end)
+			}
 		case:
 			cur = int(next)
 			i += 1

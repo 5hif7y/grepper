@@ -128,7 +128,7 @@ recorded here as such.
 | #2944 | `--stats` "bytes searched" can be wrong | printer | todo |
 | #2990 | globs ending in `.` are mishandled | globset | todo |
 | #3100 | `-r` drops line terminators | replace | todo, with `-r` |
-| #3108 | `-q --files-without-match` inverts the exit code | exit codes | todo |
+| #3108 | `-q --files-without-match` inverts the exit code | exit codes | fixed |
 | #3173 | ancestor ignore filter wrong for whitelisted hidden files | ignore | todo |
 | #3178 | `--json` summary statistics wrong | printer | todo |
 | #3179 | absolute paths with a global gitignore | ignore | todo |

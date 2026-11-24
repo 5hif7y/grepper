@@ -55,7 +55,7 @@ worker_new :: proc(h: ^Hi_Args, m: ^Matcher) -> (w: Worker) {
 	summary_kind: Summary_Kind
 	is_summary := true
 	if h.quiet {
-		summary_kind = .Quiet
+		summary_kind = .Quiet_Without_Match if h.mode.search == .Files_Without_Match else .Quiet_With_Match
 	} else {
 		switch h.mode.search {
 		case .Files_With_Matches: summary_kind = .Path_With_Match

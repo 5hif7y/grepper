@@ -379,6 +379,14 @@ RG_BUGS = [
      ("rg", [["-v", "-S", "-w", "-e", "[a&&b]", "plain.txt"]])),
     ("invert zero patterns, only matching", "U1332", ["-v", "-o", "-F", "-f", "empty.txt", "plain.txt"], "", False,
      ("rg", [["-v", "-o", "-e", "[a&&b]", "plain.txt"]])),
+    # -q --files-without-match: success when some file has no match. rg 14.1.1 inverts it;
+    # the answer is the exit code of the same search without -q
+    ("quiet files without match, all match", "U3108", ["-q", "--files-without-match", "alpha", "plain.txt", "words.txt"], "", False,
+     (1, b"")),
+    ("quiet files without match, none match", "U3108", ["-q", "--files-without-match", "zzz", "plain.txt", "empty.txt"], "", False,
+     (0, b"")),
+    ("quiet files without match, walk", "U3108", ["-q", "--files-without-match", "zzz"], "tree", False,
+     (0, b"")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

@@ -6,7 +6,10 @@ import "core:time"
 // grep-printer's summary printer (crates/printer/src/summary.rs, ripgrep 14.1.1): -c,
 // --count-matches, -l, --files-without-match and -q.
 
-Summary_Kind :: enum { Count, Count_Matches, Path_With_Match, Path_Without_Match, Quiet }
+// Quiet is two kinds, as in ripgrep 15.0.0 (#3108): 14.1.1 had one, which reported a match
+// as -l does even under --files-without-match, so `-q --files-without-match` exited 0 when
+// every file matched and 1 when one did not.
+Summary_Kind :: enum { Count, Count_Matches, Path_With_Match, Path_Without_Match, Quiet_With_Match, Quiet_Without_Match }
 
 Summary_Config :: struct {
 	kind:            Summary_Kind,
@@ -47,7 +50,7 @@ summary_sink_with_path :: proc(p: ^Summary_Printer, m: ^Matcher, path: string) -
 }
 
 summary_has_match :: proc(s: ^Summary_Sink) -> bool {
-	if s.p.config.kind == .Path_Without_Match { return s.match_count == 0 }
+	if s.p.config.kind == .Path_Without_Match || s.p.config.kind == .Quiet_Without_Match { return s.match_count == 0 }
 	return s.match_count > 0
 }
 
@@ -69,7 +72,7 @@ summary_matched :: proc(s: ^Summary_Sink, searcher: ^Searcher, mat: ^Sink_Match)
 	if s.has_stats {
 		s.stats.matches += sink_match_count
 		s.stats.matched_lines += u64(count_lines_of(mat.bytes, searcher.line_term))
-	} else if s.p.config.kind == .Path_With_Match || s.p.config.kind == .Quiet {
+	} else if s.p.config.kind == .Path_With_Match || s.p.config.kind == .Quiet_With_Match {
 		return false
 	}
 	limit, ok := s.p.config.max_matches.?
@@ -148,6 +151,6 @@ summary_finish :: proc(s: ^Summary_Sink, searcher: ^Searcher, byte_count: int, b
 		if s.match_count > 0 { write_path_line(s, searcher) }
 	case .Path_Without_Match:
 		if s.match_count == 0 { write_path_line(s, searcher) }
-	case .Quiet:
+	case .Quiet_With_Match, .Quiet_Without_Match:
 	}
 }

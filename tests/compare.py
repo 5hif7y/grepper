@@ -34,6 +34,7 @@ FILES = {
     # a match across the 64 KiB fill, and lines longer than MAX_LOOK_AHEAD
     "multi_big.txt": b"x" * 70000 + b"\nfoo\nbar\n" + (b"y" * 300 + b"\n") * 3 + b"tail foo\nbar\n",
     "multi_nul.txt": b"foo\nbar\n" + b"z\n" * 10 + b"\x00foo\nbar\n",
+    "look3180.txt": b" b b b b b b b b\nc\n",
     "mixed_eol.txt": b"hello\nworld\r\nalpha beta\r\n",
     "words.txt": "alpha alphabet alpha_x xalpha\nALPHA Alpha\nnaïve café Σοφός σοφός\nKelvin \u212a k\n".encode(),
     "nuldata.txt": b"one alpha\x00two\x00alpha three\x00four",
@@ -526,6 +527,10 @@ RG_BUGS = [
     # message for two matches; the answer is rg 16.0.0's
     ("multiline json, two matches in a block", "U1983", ["-U", "--json", "t\\nfoo|z\\nqux", "multi.txt"], "", False,
      (0, b'{"type":"begin","data":{"path":{"text":"multi.txt"}}}\n{"type":"match","data":{"path":{"text":"multi.txt"},"lines":{"text":"start\\nfoo\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"t\\nfoo"},"start":4,"end":9}]}}\n{"type":"match","data":{"path":{"text":"multi.txt"},"lines":{"text":"bar baz\\nqux\\n"},"line_number":3,"absolute_offset":10,"submatches":[{"match":{"text":"z\\nqux"},"start":6,"end":11}]}}\n{"type":"end","data":{"path":{"text":"multi.txt"},"binary_offset":null,"stats":{"elapsed":{"secs":0,"nanos":0,"human":"0s"},"searches":1,"searches_with_match":1,"bytes_searched":35,"bytes_printed":424,"matched_lines":4,"matches":2}}}\n{"data":{"elapsed_total":{"human":"0s","nanos":0,"secs":0},"stats":{"bytes_printed":424,"bytes_searched":35,"elapsed":{"human":"0s","nanos":0,"secs":0},"matched_lines":4,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n')),
+    # -U -r with a match that ends past the matched lines: rg 14.1.1 panics (slice index starts
+    # at 18 but ends at 17); the answer is rg 16.0.0's, its regression test r3180
+    ("multiline replace past the range", "U3180", ["(^|[^a-z])((([a-z]+)?)\\s)?b(\\s([a-z]+)?)($|[^a-z])", "look3180.txt", "-U", "-rx"], "", False,
+     (0, b"xbxbx\n")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

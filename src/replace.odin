@@ -63,7 +63,11 @@ replacer_replace_all :: proc(r: ^Replacer, searcher: ^Searcher, m: ^Matcher, byt
 		interpolate(r, m, hay, replacement)
 		append(&r.matches, Range{start, len(r.dst)})
 	}
-	append(&r.dst, ..hay[last:min(len(hay), range.end)])
+	// a match may end past range.end (look-around at the range's edge in multi line mode):
+	// the rest then starts there, and runs to the end of what the regex saw (fix over 14.1.1,
+	// ripgrep 15.0.0's #3180, where the slice's start passed its end and ripgrep panicked)
+	end := len(hay) if last > range.end else min(len(hay), range.end)
+	append(&r.dst, ..hay[last:end])
 	append(&r.dst, ..term)
 }
 

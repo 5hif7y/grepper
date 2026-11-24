@@ -147,7 +147,7 @@ recorded here as such.
 | #3382 | buffered matches lost after an error in a parallel search | walk | todo: needs a read that fails mid-search |
 | #3617 | on Windows, stdout that is a pipe is compared against the searched files | walk | todo, with the stdout check |
 | #2094 #3076 | `-m` with `-U` shows too many matches | multiline | fixed in the multi line search only; upstream moved `-m` to the searcher in every mode (a6e0be3), which is where #3593, R16-1 and R16-2 came from, so line mode keeps 14.1.1's |
-| #3180 | `-U` with `-r` panics | multiline | todo |
+| #3180 | `-U` with `-r` panics | multiline | fixed (grepper's port panicked the same way) |
 | #1983 #3364 | `--json` emits one match per multiline match block | multiline | fixed |
 | #3503 | multi-line match discovery gives up past `MAX_LOOK_AHEAD` | multiline | todo |
 | #3342 | compressed files detected by extension only, not by magic number | `-z` | todo, with `-z` |

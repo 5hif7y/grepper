@@ -282,12 +282,18 @@ ignore_matched_ignore :: proc(n: ^Ignore_Node, path: string, is_dir: bool) -> Ve
 		saw_git = saw_git || p.has_git
 	}
 	if o.parents && n.absolute_base != "" {
-		// the path made absolute against the root, after stripping this node's directory
-		// (ripgrep's own, even for nodes below the root)
-		prefix := strip_dot_slash(n.dir)
+		// The path made absolute against the root: the root's directory (the topmost node
+		// that is not an absolute parent) stripped from it, then joined to absolute_base.
+		// Fix over 14.1.1 (grepper's PARITY B3, ripgrep 15.0.0's): 14.1.1 stripped this
+		// node's directory instead, so below the root the directories in between were lost
+		// and a parent's rule naming them never matched.
 		rel := path
-		if r, ok := strip_path_prefix(prefix, path); ok {
-			rel = strings.trim_prefix(r, "/")
+		top: ^Ignore_Node
+		for q := n; q != nil && !q.is_absolute_parent; q = q.parent { top = q }
+		if top != nil && top.dir != "." {
+			if r, ok := strip_path_prefix(strip_dot_slash(top.dir), path); ok {
+				rel = strings.trim_prefix(r, "/")
+			}
 		}
 		abs := path_join(n.absolute_base, rel)
 		for ; p != nil; p = p.parent {

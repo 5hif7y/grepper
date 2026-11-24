@@ -366,6 +366,15 @@ RG_BUGS = [
      ("rg", [["-F", "-l", "alpha", "src"], ["-F", "-l", "alpha", "docs"]])),
     ("walk two roots, one deeper", "B2", ["-F", "-l", "alpha", "src/deep", "docs"], "tree", True,
      ("rg", [["-F", "-l", "alpha", "src/deep"], ["-F", "-l", "alpha", "docs"]])),
+    # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
+    # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
+    # and prints it
+    ("parent rule below the root", "B3", ["-l", "alpha", "docs"], "tree4", True,
+     ("rg", [["-l", "alpha"]])),
+    ("parent rule below the root, root deeper", "B3", ["-l", "alpha", "docs/a"], "tree4", True,
+     (0, b"docs/a\\final.md\n" if os.name == "nt" else b"docs/a/final.md\n")),
+    ("parent rule below the working directory", "B3", ["-l", "alpha"], "tree4/docs", True,
+     (0, b"a\\final.md\n" if os.name == "nt" else b"a/final.md\n")),
 ]
 
 
@@ -410,6 +419,14 @@ TREE3 = {
 }
 
 
+# parent-directory rules that name directories below the search root (PARITY B3)
+TREE4 = {
+    ".gitignore": b"docs/a/b/draft*\n",
+    "docs/a/b/draft1.md": b"alpha draft\n",
+    "docs/a/final.md": b"alpha final\n",
+}
+
+
 def write_tree(name, files, mtimes=False):
     tree = os.path.join(FIX, name)
     shutil.rmtree(tree, ignore_errors=True)
@@ -439,6 +456,7 @@ def write_fixtures():
             f.write(data)
     tree2 = write_tree("tree2", TREE2, mtimes=True)
     write_tree("tree3", TREE3)
+    write_tree("tree4", TREE4)
     with open(os.path.join(FIX, "extra.ignore"), "wb") as f:
         f.write(b"c.txt\n*.py\n")
     if os.name == "nt":

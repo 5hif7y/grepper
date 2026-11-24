@@ -173,22 +173,60 @@ end
 ' > m; rg -U -v -n -m1 'foo
 bar' m` prints lines 1, 4, 5, 6 and 7; 14.1.1 prints `1:start` | prints `1:start`, as 14.1.1 |
 
-## NVOL work this port needs
+## Pending (regenerated 2026-11-24)
 
-- **Reverse memmem** (`memchr::memmem::FinderRev`): regex-automata's reverse-suffix and
-  reverse-inner strategies. NVOL PENDING item 40.
-- **UTF-16 to UTF-8 transcoding** (encoding_rs's SIMD paths): `-E` and BOM sniffing.
-- **Prefilter choice as regex-automata's**: memchr, memchr2, memchr3, memmem, Teddy, and
-  Rabin-Karp for sets Teddy refuses. NVOL has the first five.
+Every SIMD step is an NVOL kernel: written and tested in NVOL first (against its interpreter,
+benchmarked against the crate it replaces), then used here. "NVOL: has" names a kernel NVOL
+already ships; "NVOL: new" one to write there. The order is the order of work.
 
-## Order
+### 1. Speed: beat rg on every row of `tests/bench.py`
 
-1. Searcher and standard printer (section 1), on the interim regex engine.
-2. Walk and filters (section 3).
-3. The regex-automata port (section 2), which `-w`, `-x`, Unicode, `-U` and `-r` captures wait
-   on.
-4. Input (section 4) and the NVOL kernels it needs.
-5. Command line and configuration (section 5).
+| # | Item | NVOL |
+|---|---|---|
+| P1 | literal extraction for regexes (regex-syntax's `Extractor`: prefixes, suffixes, inner literals) and regex-automata's prefilter choice, so a regex with a literal is searched by a literal kernel first | has: memchr, memchr2, memchr3, memmem, Teddy; new: Rabin-Karp for sets Teddy refuses (scalar, kept in NVOL with the rest of the family) |
+| P2 | the reverse-suffix and reverse-inner strategies (a literal found, then the regex run backwards from it) | new: reverse memmem (NVOL PENDING item 40) |
+| P3 | accelerated DFA states: a state that loops on itself except for one to three bytes skips ahead with memchr, as regex-automata does | has: memchr, memchr2, memchr3 |
+| P4 | the lazy DFA in multi line mode (today `-U` runs on the PikeVM alone), and the cache size limits (`--dfa-size-limit`) | none |
+| P5 | the one-pass DFA and the bounded backtracker for capture groups (`-o`, `-r`, colours), as regex-automata's meta engine picks them | none |
+| P6 | the benchmark again after P1-P5, on Windows and Linux, best of several idle runs; a row slower than rg is a pending item of its own | none |
 
-The bugs of section 6 are fixed alongside: the ones in parts already ported first (B1-B3 and
-the upstream rows without a "with" note), each later one together with the feature it names.
+### 2. Features of rg 14.1.1 still missing
+
+| # | Item | Flags | NVOL |
+|---|---|---|---|
+| F1 | grapheme clusters for the preview of long lines | `--max-columns-preview` | none (Unicode tables, scalar) |
+| F2 | encodings: BOM sniffing, UTF-16 to UTF-8, the WHATWG labels encoding_rs knows | `-E` | new: UTF-16 to UTF-8 transcoding; new: full UTF-8 validation (NVOL item 36, Keiser-Lemire, also for `--json`'s text check); has: `first_non_ascii` for the ASCII fast path |
+| F3 | decompression through external tools, with #3342 (magic numbers) and #3222 (flags apart from paths) | `-z` | none |
+| F4 | preprocessors | `--pre --pre-glob` | none |
+| F5 | the regex size limit, and `--engine` | `--regex-size-limit --engine` | none |
+| F6 | PCRE2, with #3503 | `-P --pcre2-version` | depends on decision D1 |
+| F7 | hyperlinks | `--hyperlink-format --hostname-bin` | none |
+| F8 | skipping the file stdout is redirected to, with #3617 | | none |
+| F9 | the `--debug` and `--trace` logs | `--debug --trace` | none |
+| F10 | rg's exact help and version text, the man page and the completions | `-h --help -V --generate` | none |
+
+### 3. rg bugs waiting on something (section 6)
+
+| # | Bug | Waits on |
+|---|---|---|
+| W1 | #3609 | a Linux run (T2) |
+| W2 | #2958 | a console harness (T3) |
+| W3 | #2552, #3534 | symlinks: directory junctions on this account, or Linux (T2) |
+| W4 | #3382 | a test that makes a read fail mid-search |
+| W5 | B5 (relative `..` paths against `--ignore-file`) | a fix of grepper's own: rg 16.0.0 has it too |
+
+### 4. Testing and platforms
+
+| # | Item |
+|---|---|
+| T1 | `-L` and `--one-file-system` cases (ported, untested) |
+| T2 | the whole suite and the benchmark on Linux (WSL Arch), and the Unix-only paths |
+| T3 | a console harness for what rg does only on a terminal (#2958, colour defaults) |
+| T4 | the fuzzers (`regex_fuzz.py`, `multiline_fuzz.py`, `line_paths.py`) run over more seeds in one go |
+
+### 5. Decisions for the user
+
+| # | Question |
+|---|---|
+| D1 | PCRE2: link the C library (its JIT brings its own SIMD, outside NVOL), or port the subset rg users need on grepper's engine |
+| D2 | the features rg added after 14.1.1 (`--in`, `-G/--glob-not`, `RIPGREP_THREADS`, `--max-bytes`, POSIX classes in globs, jj repositories, `GIT_CONFIG_GLOBAL`): take them or stay at 14.1.1's flag set |

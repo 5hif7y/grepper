@@ -1,0 +1,13 @@
+[package]
+name = "literal_oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# regex-syntax 0.8.4's literal extraction, printed in the format tests/literal_oracle.py diffs
+# against grepper's port (src/hir_literal.odin).
+
+[dependencies]
+regex-syntax = { path = "C:/Users/Shifty/AppData/Local/Temp/claude/9aa66bb60c77438a/efd8636f-a061-48ef-9d5c-5835fbfe9ed6/scratchpad/crates/regex-syntax-0.8.4", default-features = false, features = ["std", "unicode"] }
+
+[workspace]

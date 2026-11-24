@@ -411,6 +411,12 @@ RG_BUGS = [
      (0, os.path.join("dot", "foo.").encode() + b"\n")),
     ("glob ending in a dot, ignored", "U2990", ["--files", "-g", "!foo.", "dot"], "tree5", True,
      (0, os.path.join("dot", "bar").encode() + b"\n")),
+    # a glob class never matches '/': rg 14.1.1 lets [!x] and [/] match it, and ignores
+    # cls/a/b.txt and cls/c/d.txt
+    ("ignore class with the separator", "U2745", ["--files", "cls"], "tree5", True,
+     (0, b"".join(os.path.join("cls", *p.split("/")).encode() + b"\n" for p in ["a/b.txt", "c/d.txt", "keep.txt"]))),
+    ("glob class with the separator", "U2745", ["--files", "--no-ignore", "-g", "*[/]*", "cls"], "tree5", True,
+     (1, b"")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it
@@ -484,6 +490,12 @@ TREE5 = {
     # a name ending in '.'
     "dot/foo.": b"hit\n",
     "dot/bar": b"hit\n",
+    # classes that would match '/'
+    "cls/.gitignore": b"a[!x]b.txt\nc[/]d.txt\n",
+    "cls/a/b.txt": b"hit\n",
+    "cls/c/d.txt": b"hit\n",
+    "cls/ayb.txt": b"hit\n",
+    "cls/keep.txt": b"hit\n",
 }
 
 # parent-directory rules that name directories below the search root (PARITY B3)

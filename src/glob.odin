@@ -379,7 +379,7 @@ build_token :: proc(m: ^Glob_Matcher, t: Glob_Token, opts: Glob_Options, next: i
 		many := lit_bytes(m, {'/'}, false, star(m, dot_set(), lit_bytes(m, {'/'}, false, next)))
 		return alt2(m, one, many)
 	case .Class:
-		return byte_state(m, class_set(t, ci), next)
+		return byte_state(m, class_set(t, ci, opts.literal_separator), next)
 	case .Alternates:
 		// each alternative's regex; empty ones are dropped (empty_alternates is off for
 		// every glob ripgrep builds), and no group at all if none is left
@@ -400,7 +400,11 @@ build_token :: proc(m: ^Glob_Matcher, t: Glob_Token, opts: Glob_Options, next: i
 // The class as regex-syntax reads `[...]` built from escaped UTF-8 bytes: every range end
 // is its character's bytes, so a non-ASCII character adds its bytes one by one, and a range
 // joins the last byte of one end to the first byte of the other.
-class_set :: proc(t: Glob_Token, ci: bool) -> (s: Byte_Set) {
+//
+// With literal_separator a class never matches '/', negated or not, as in git and POSIX
+// fnmatch with FNM_PATHNAME. Fix over 14.1.1 (ripgrep 16.0.0's #2745), whose `[/]` and
+// `[!a]` matched it.
+class_set :: proc(t: Glob_Token, ci: bool, literal_separator: bool) -> (s: Byte_Set) {
 	Item :: struct { b: u8, dash: bool }
 	items: [dynamic]Item
 	defer delete(items)
@@ -423,6 +427,10 @@ class_set :: proc(t: Glob_Token, ci: bool) -> (s: Byte_Set) {
 		}
 	}
 	if ci { bs_fold(&s) }
+	if literal_separator {
+		// upstream drops '/' from the ranges of a class, and adds it to a negated one
+		if t.negated { bs_add(&s, '/') } else { s['/' >> 6] &~= 1 << ('/' & 63) }
+	}
 	if t.negated { bs_negate(&s) }
 	return
 }

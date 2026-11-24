@@ -24,6 +24,8 @@ Matcher :: struct {
 	slots:    []int,
 	dfa:      Lazy_Dfa,
 	lit_slots: [2]int,     // group 0 of the last matcher_captures_at, for the literal kinds
+	bt:        Backtrack_Cache,
+	bt_max:    int,        // the longest haystack the backtracker takes
 	non_matching: [256]bool,   // grep-regex's non_matching_bytes: bytes no match contains
 	// grep-regex's fast line regex: inner literals every match contains, searched first to
 	// find a candidate line, which the regex then confirms (nil: none)
@@ -40,6 +42,7 @@ matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 	}
 	if m.nfa != nil {
 		c.cache = pike_cache_new(m.nfa)
+		c.bt = backtrack_cache_new(m.nfa)
 		c.slots = make([]int, m.nfa.slots)
 		c.dfa = dfa_new(m.nfa)
 	}
@@ -130,6 +133,8 @@ matcher_pike :: proc(h: ^Hir, pre: ^Prefilter) -> (m: Matcher) {
 	rx_finish(m.nfa)
 	m.nfa.pre = pre
 	m.cache = pike_cache_new(m.nfa)
+	m.bt = backtrack_cache_new(m.nfa)
+	m.bt_max = backtrack_max_haystack_len(m.nfa)
 	m.slots = make([]int, m.nfa.slots)
 	m.dfa = dfa_new(m.nfa)
 	return
@@ -225,7 +230,13 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 		}
 		return s, e, best >= 0
 	case .Pike:
-		if !pike_search(m.nfa, &m.cache, hay[:end], start, end, false, m.slots) { return }
+		// the meta engine's order for a search with capture slots: the bounded backtracker
+		// when the span fits it, else the PikeVM
+		if end - start <= m.bt_max {
+			if !backtrack_search(m.nfa, &m.bt, hay[:end], start, end, m.slots) { return }
+		} else if !pike_search(m.nfa, &m.cache, hay[:end], start, end, false, m.slots) {
+			return
+		}
 		return m.slots[0], m.slots[1], true
 	}
 	return

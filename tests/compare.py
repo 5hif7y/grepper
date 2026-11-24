@@ -417,6 +417,10 @@ RG_BUGS = [
      (0, b"".join(os.path.join("cls", *p.split("/")).encode() + b"\n" for p in ["a/b.txt", "c/d.txt", "keep.txt"]))),
     ("glob class with the separator", "U2745", ["--files", "--no-ignore", "-g", "*[/]*", "cls"], "tree5", True,
      (1, b"")),
+    # --stats "bytes searched" when the search stops early on a read file: rg 14.1.1 says 0;
+    # the answer is what a memory map gives, the bytes up to the end of the last line looked at
+    ("stats bytes searched, stopped early", "U2944", ["--no-mmap", "-m1", "--stats", "-c", "alpha", "plain.txt"], "", False,
+     ("rg", [["--mmap", "-m1", "--stats", "-c", "alpha", "plain.txt"]])),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

@@ -425,7 +425,12 @@ read_by_line :: proc(s: ^Searcher, m: ^Matcher, lb: ^Line_Buffer, sink: ^Sink) -
 		for {
 			more := rbl_fill(&c, lb) or_return
 			if !more { break }
-			if !core_match_by_line(&c, lb_buffer(lb)) { break }
+			if !core_match_by_line(&c, lb_buffer(lb)) {
+				// the bytes the core got through count as searched when it stops early (fix
+				// over 14.1.1, ripgrep 15.0.0's #2944: --no-mmap -m1 --stats said 0 bytes)
+				lb_consume(lb, c.pos)
+				break
+			}
 		}
 	}
 	sink_finish(sink, s, lb.absolute_byte_offset, lb.binary_byte_offset)

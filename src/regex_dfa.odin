@@ -15,22 +15,30 @@ import "core:slice"
 
 Dfa_Ctx :: enum u8 { Start, LF, CR, Word, Other, Non_Ascii }
 
+// The transitions of every state are one flat table, 257 entries a state (each byte, and
+// the end at 256), and a transition holds its target premultiplied: the index of the target's
+// first entry. Everything the search must stop for is negative, so the inner loop does one
+// comparison a byte, as regex-automata's lazy DFA does with its tagged state ids.
+DFA_STRIDE :: 257
+
 DFA_UNKNOWN :: -1
 DFA_MATCH   :: -2      // a match ends where the byte would be read
 DFA_QUIT    :: -3
 DFA_NO_EOI  :: -4      // at the end: no match
+// a transition into a start state when there is a prefilter: DFA_START_TAG - target
+DFA_START_TAG :: -16
 
 Dfa_State :: struct {
 	is_start: bool,          // no seeds: only the unanchored start's closure is alive
 	ctx:   Dfa_Ctx,
 	seeds: []i32,
-	trans: [257]i32,     // per byte, and EOI at 256
 }
 
 Lazy_Dfa :: struct {
 	nfa:          ^Rx_NFA,
 	pre:          ^Prefilter,     // the NFA's prefilter, this DFA's own copy
 	states:       [dynamic]Dfa_State,
+	trans:        [dynamic]i32,   // DFA_STRIDE entries per state, encoded as above
 	index:        map[string]i32,
 	has_uni_word: bool,
 	// scratch
@@ -115,8 +123,10 @@ state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32) -> i32 {
 	}
 	if id, ok := d.index[string(d.key[:])]; ok { return id }
 	st := Dfa_State{ctx = ctx, seeds = slice.clone(seeds), is_start = len(seeds) == 0}
-	for &t in st.trans { t = DFA_UNKNOWN }
 	append(&d.states, st)
+	base := len(d.trans)
+	resize(&d.trans, base + DFA_STRIDE)
+	for k in base ..< base + DFA_STRIDE { d.trans[k] = DFA_UNKNOWN }
 	id := i32(len(d.states) - 1)
 	d.index[string(slice.clone(d.key[:]))] = id
 	return id
@@ -135,6 +145,7 @@ dfa_reset :: proc(d: ^Lazy_Dfa) {
 	for &x in d.start_ids { x = -1 }
 	for s in d.states { delete(s.seeds) }
 	clear(&d.states)
+	clear(&d.trans)
 	for k in d.index { delete(k) }
 	clear(&d.index)
 }
@@ -201,46 +212,76 @@ compute :: proc(d: ^Lazy_Dfa, sid: i32, next: int) -> (to: i32, reset: bool) {
 
 Dfa_Result :: enum { No_Match, Match, Quit }
 
+// a computed transition as the table holds it
+@(private="file")
+encode :: #force_inline proc(d: ^Lazy_Dfa, to: i32) -> i32 {
+	if to < 0 { return to }
+	base := to * DFA_STRIDE
+	if d.pre != nil && d.states[to].is_start { return DFA_START_TAG - base }
+	return base
+}
+
+// in a start state at i: the prefilter skips to where a match may start (find_fwd_imp). A
+// prefilter exists only for a regex that cannot match the empty string, so no candidate means
+// no match.
+@(private="file")
+prefilter_skip :: #force_inline proc(d: ^Lazy_Dfa, h: []u8, i: ^int, cur: ^int, end: int) -> bool {
+	r, ok := prefilter_find(d.pre, h, i^, end)
+	if !ok { return false }
+	if r.start > i^ {
+		i^ = r.start
+		cur^ = int(start_state(d, byte_ctx(h[i^ - 1]))) * DFA_STRIDE
+	}
+	return true
+}
+
 // the first position in h[start:end) (end included) where a match ends; look-behind sees
 // h[start-1], and the end of h is the end of the input
 dfa_find_earliest :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa_Result) {
 	ctx := Dfa_Ctx.Start
 	if start > 0 { ctx = byte_ctx(h[start - 1]) }
-	sid := start_state(d, ctx)
-	for i := start; i < end; i += 1 {
-		// in a start state, the prefilter skips to where a match may start (find_fwd_imp);
-		// a prefilter exists only for a regex that cannot match the empty string, so no
-		// candidate means no match
-		if d.pre != nil && d.states[sid].is_start {
-			r, ok := prefilter_find(d.pre, h, i, end)
-			if !ok { return 0, .No_Match }
-			if r.start > i {
-				i = r.start
-				sid = start_state(d, byte_ctx(h[i - 1]))
-			}
+	i := start
+	cur := int(start_state(d, ctx)) * DFA_STRIDE
+	if d.pre != nil && i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
+	for i < end {
+		// the hot loop: known transitions to ordinary states
+		tbl := d.trans[:]
+		#no_bounds_check for i < end {
+			next := tbl[cur + int(h[i])]
+			if next < 0 { break }
+			cur = int(next)
+			i += 1
 		}
-		b := h[i]
-		next := d.states[sid].trans[b]
+		if i >= end { break }
+		b := int(h[i])
+		next := d.trans[cur + b]
 		if next == DFA_UNKNOWN {
-			reset: bool
-			next, reset = compute(d, sid, int(b))
-			// after a reset of the cache sid is gone
-			if !reset { d.states[sid].trans[b] = next }
+			to, reset := compute(d, i32(cur / DFA_STRIDE), b)
+			next = encode(d, to)
+			// after a reset of the cache the state at cur is gone
+			if !reset { d.trans[cur + b] = next }
 		}
-		switch next {
-		case DFA_MATCH: return i, .Match
-		case DFA_QUIT: return i, .Quit
+		switch {
+		case next == DFA_MATCH: return i, .Match
+		case next == DFA_QUIT: return i, .Quit
+		case next <= DFA_START_TAG:
+			cur = int(DFA_START_TAG - next)
+			i += 1
+			if i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
+		case:
+			cur = int(next)
+			i += 1
 		}
-		sid = next
 	}
 	// the end: a match that needs to see it
+	sid := i32(cur / DFA_STRIDE)
 	eoi_byte := 256
 	if end < len(h) { eoi_byte = int(h[end]) }
-	t := d.states[sid].trans[256] if eoi_byte == 256 else DFA_UNKNOWN
+	t: i32 = d.trans[cur + 256] if eoi_byte == 256 else DFA_UNKNOWN
 	if t == DFA_UNKNOWN {
 		reset: bool
 		t, reset = compute(d, sid, eoi_byte)
-		if eoi_byte == 256 && !reset { d.states[sid].trans[256] = t }
+		if eoi_byte == 256 && !reset { d.trans[cur + 256] = t }
 	}
 	switch t {
 	case DFA_MATCH: return end, .Match

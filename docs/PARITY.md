@@ -141,7 +141,7 @@ recorded here as such.
 | #2745 | glob character classes match the path separator | globset | fixed |
 | #3609 #3603 | partial path components accepted when stripping prefixes | paths | todo |
 | #2958 | control codes in paths are printed raw | printer | todo |
-| #3484 | Scheme files are part of the Lisp type | types | todo |
+| #3484 | Scheme files are part of the Lisp type | types | fixed: 14.1.1's table with only this change (types added after 14.1.1 are not taken) |
 | #2552 | `-L` reports broken symlinks that are ignored | walk | todo |
 | #3534 | symlink loops above the search root are not detected | walk | todo |
 | #3382 | buffered matches lost after an error in a parallel search | walk | todo |

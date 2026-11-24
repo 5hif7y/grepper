@@ -276,8 +276,6 @@ TREE2_CASES = [
     ("type clear", ["-l", "--type-clear", "rust", "--type-add", "rust:*.py", "-t", "rust", "alpha"]),
     ("type unknown", ["-l", "-t", "nosuchtype", "alpha"]),
     ("type bad def", ["-l", "--type-add", "bad", "alpha"]),
-    ("type list", ["--type-list"]),
-    ("type list added", ["--type-add", "zzz:*.zzz", "--type-clear", "rust", "--type-list"]),
     ("max depth 0", ["--files", "-d", "0"]),
     ("max depth 1", ["--files", "--max-depth", "1"]),
     ("max depth 2", ["--files", "--maxdepth", "2"]),
@@ -354,12 +352,18 @@ TREE_CASES = [
 ]
 
 
+SCHEME_TYPE = [
+    (b"lisp: *.el, *.jl, *.lisp, *.lsp, *.sc, *.scm\n", b"lisp: *.el, *.jl, *.lisp, *.lsp\n"),
+    (b"scala: *.sbt, *.scala\n", b"scala: *.sbt, *.scala\nscheme: *.sc, *.scm, *.sld, *.ss\n"),
+]
+
 # ripgrep 14.1.1's bugs that grepper fixes (docs/PARITY.md section 6). Each case gives the
 # right answer as `expect`: either other rg arguments that ask the same question without
 # hitting the bug (("rg", [args, ...]), their outputs concatenated), or (rc, stdout). rg is
 # run on the case too: if it gives the right answer, the case no longer shows the bug, and
 # that is reported as a failure, so every case keeps documenting a real difference. An "rg"
-# answer may name a third item, the directory to run it from.
+# answer may name a third item, the directory to run it from. ("rg_sub", args, [(old, new),
+# ...]) is rg 14.1.1's output for args with each old bytes replaced, once, by new.
 # (name, bug, args, directory under fixtures or "", sorted, expect)
 RG_BUGS = [
     ("not-equal property", "B1", ["-o", "-n", "\\p{sc!=Greek}+", "words.txt"], "", False,
@@ -437,6 +441,16 @@ RG_BUGS = [
     # which rg 14.1.1 strips to nothing and keeps; the answer is the search run from tree5
     ("glob dir from inside it", "U3581", ["--files", "--no-ignore", "-g", "!cls/", os.path.join(FIX, "tree5")], "tree5/cls", True,
      ("rg", [["--files", "--no-ignore", "-g", "!cls/", os.path.join(FIX, "tree5")]], "tree5")),
+    # Scheme is its own type, no longer part of lisp (*.sc and *.scm move, *.ss and *.sld are
+    # new); the rest of the table stays 14.1.1's
+    ("type list", "U3484", ["--type-list"], "", False,
+     ("rg_sub", ["--type-list"], SCHEME_TYPE)),
+    ("type list added", "U3484", ["--type-add", "zzz:*.zzz", "--type-clear", "rust", "--type-list"], "", False,
+     ("rg_sub", ["--type-add", "zzz:*.zzz", "--type-clear", "rust", "--type-list"], SCHEME_TYPE)),
+    ("type lisp", "U3484", ["--files", "-t", "lisp", "types"], "tree5", True,
+     (0, os.path.join("types", "c.el").encode() + b"\n")),
+    ("type scheme", "U3484", ["--files", "-t", "scheme", "types"], "tree5", True,
+     (0, b"".join(os.path.join("types", f).encode() + b"\n" for f in ["a.scm", "b.ss"]))),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it
@@ -516,6 +530,9 @@ TREE5 = {
     "cls/c/d.txt": b"hit\n",
     "cls/ayb.txt": b"hit\n",
     "cls/keep.txt": b"hit\n",
+    "types/a.scm": b"hit\n",
+    "types/b.ss": b"hit\n",
+    "types/c.el": b"hit\n",
     # an --ignore-file pattern anchored at the working directory
     "anchor.ignore": b"/haystack\n",
     "a/b/c/haystack": b"hit\n",
@@ -656,6 +673,12 @@ def main():
             ref_cwd = os.path.join(FIX, expect[2]) if len(expect) > 2 else cwd
             outs = [run(a.rg, x, ["-j1"], ref_cwd) for x in expect[1]]
             want = (0 if any(o[0] == 0 for o in outs) else outs[0][0], b"".join(normalize(o[1]) for o in outs))
+        elif expect[0] == "rg_sub":
+            rc, out, _ = run(a.rg, expect[1], ["-j1"], cwd)
+            for old, new in expect[2]:
+                assert old in out, (name, old)
+                out = out.replace(old, new, 1)
+            want = (rc, normalize(out))
         else:
             want = expect
         g = run(a.grepper, args, ["-j1"], cwd)

@@ -23,12 +23,30 @@ The same results as ripgrep, and equal or better speed, measured, not assumed:
 
 | Stage | What | Status |
 |---|---|---|
-| MVP | literal search (NVOL memchr/memmem/Teddy) over one file | in progress |
-| MVP | recursive, parallel walk honouring `.gitignore`, `.ignore`, hidden files | planned |
-| MVP | regex through Odin's `core:text/regex`, with NVOL as the literal prefilter | planned |
-| MVP | ripgrep's output format (headings, line numbers, colours, `-l`, `-c`) and tests against `rg` | planned |
-| Port | regex-syntax / regex-automata (lazy DFA, literal extraction) | later |
+| MVP | literal search (NVOL memchr/memmem/Teddy) | done |
+| MVP | recursive, parallel walk honouring `.gitignore`, `.ignore`, `.rgignore`, `.git/info/exclude`, hidden files | done |
+| MVP | regex through Odin's `core:text/regex`, with NVOL as the literal prefilter | done |
+| MVP | ripgrep's output format (headings, line numbers, colours, `-l`, `-c`, binary files) | done |
+| Port | regex-syntax / regex-automata (lazy DFA, literal extraction, Unicode) | next |
 | Port | globset, ignore, searcher, printer, cli: the remaining crates, 1:1 | later |
+
+`tests/compare.py` runs grepper and ripgrep on the same arguments and compares their output
+and exit code byte for byte. Today all 66 cases match ripgrep 14.1.1.
+
+### Supported today
+
+`-F -i -e -n -N -H -I --heading --no-heading -l -c --color -j --hidden --no-ignore`; short
+flags combine and take attached values (`-nH`, `-j1`), as in ripgrep. Any other flag is an
+error, never ignored.
+
+### Known differences from ripgrep
+
+- **`-i`, `\d \w \s`:** ASCII only. ripgrep's are Unicode. They come from the interim regex
+  engine and are lifted by the regex-automata port.
+- **stdin:** with no path, grepper searches the current directory. ripgrep searches stdin when
+  it is not a terminal.
+- **Configuration and filters:** no `--glob`/`-g`, `--type`, context lines (`-A/-B/-C`), `-o`,
+  `-w`, `-v`, replacement or JSON output yet, and no global gitignore (`core.excludesFile`).
 
 ## Building
 

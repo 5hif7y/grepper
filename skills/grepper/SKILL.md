@@ -28,8 +28,19 @@ grepper -n pattern file.c       # line numbers (on by default when printing to a
 
 ## Supported today
 
-Pre-alpha: a subset of ripgrep's flags. A flag grepper does not know is an error, never
-silently ignored: when that happens, run the same search with `rg` and mention it.
+Pre-alpha: `-F -i -e -n -N -H -I --heading --no-heading -l -c --color -j --hidden
+--no-ignore`, combinable as in ripgrep (`-nH`). A flag grepper does not know is an error,
+never silently ignored: when that happens, run the same search with `rg` and mention it.
+Not yet supported:
+- `-g/--glob`, `-t/--type`;
+- context lines (`-A/-B/-C`);
+- `-o`, `-w`, `-v`.
+
+Limits to keep in mind:
+- **`-i` and `\d \w \s`:** they match ASCII only. Use `rg` when Unicode case or classes
+  matter.
+- **No path given:** grepper searches the current directory, even when input is piped to it.
+  Pass the paths explicitly.
 
 ## Reading the output
 

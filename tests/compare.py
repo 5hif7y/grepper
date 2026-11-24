@@ -348,6 +348,22 @@ TREE_CASES = [
 ]
 
 
+# ripgrep 14.1.1's bugs that grepper fixes (docs/PARITY.md section 6). Each case gives the
+# right answer as `expect`: either other rg arguments that ask the same question without
+# hitting the bug (("rg", [args, ...]), their outputs concatenated), or (rc, stdout). rg is
+# run on the case too: if it gives the right answer, the case no longer shows the bug, and
+# that is reported as a failure, so every case keeps documenting a real difference.
+# (name, bug, args, directory under fixtures or "", sorted, expect)
+RG_BUGS = [
+    ("not-equal property", "B1", ["-o", "-n", "\\p{sc!=Greek}+", "words.txt"], "", False,
+     ("rg", [["-o", "-n", "\\P{sc=Greek}+", "words.txt"]])),
+    ("negated not-equal property", "B1", ["-o", "\\P{sc!=Greek}+", "words.txt"], "", False,
+     ("rg", [["-o", "\\p{sc=Greek}+", "words.txt"]])),
+    ("not-equal property in a class", "B1", ["-c", "[\\p{sc!=Latin}&&\\pL]", "words.txt"], "", False,
+     ("rg", [["-c", "[\\P{sc=Latin}&&\\pL]", "words.txt"]])),
+]
+
+
 # a second tree for the walk filters: globs, types, depth, size, sorting, ignore-file
 # precedence (.rgignore over .ignore over .gitignore), parent directories' ignore files
 TREE2 = {
@@ -499,7 +515,33 @@ def main():
             print(f"  rg      rc={r[0]} {r[1][:400]!r}")
     total = sum(1 for n, *_ in cases if a.k in n)
     print(f"{total - bad}/{total} cases match rg")
-    return 1 if bad else 0
+    fixed_bad, fixed_total = 0, 0
+    for name, bug, args, sub, sort, expect in RG_BUGS:
+        if a.k not in name:
+            continue
+        fixed_total += 1
+        cwd = os.path.join(FIX, sub) if sub else FIX
+        if expect[0] == "rg":
+            outs = [run(a.rg, x, ["-j1"], cwd) for x in expect[1]]
+            want = (0 if any(o[0] == 0 for o in outs) else outs[0][0], b"".join(normalize(o[1]) for o in outs))
+        else:
+            want = expect
+        g = run(a.grepper, args, ["-j1"], cwd)
+        r = run(a.rg, args, ["-j1"], cwd)
+        g, r = (g[0], normalize(g[1])), (r[0], normalize(r[1]))
+        if sort:
+            g, r, want = [(x[0], b"".join(sorted(x[1].splitlines(True)))) for x in (g, r, want)]
+        if g != want:
+            fixed_bad += 1
+            print(f"DIFF {bug} {name}: {args}")
+            print(f"  grepper rc={g[0]} {g[1][:400]!r}")
+            print(f"  want    rc={want[0]} {want[1][:400]!r}")
+        elif r == want:
+            fixed_bad += 1
+            print(f"STALE {bug} {name}: rg 14.1.1 gives the right answer, so the case shows no bug")
+    if fixed_total:
+        print(f"{fixed_total - fixed_bad}/{fixed_total} ripgrep bugs fixed")
+    return 1 if bad or fixed_bad else 0
 
 
 if __name__ == "__main__":

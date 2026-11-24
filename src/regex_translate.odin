@@ -9,8 +9,8 @@ import "core:unicode/utf8"
 // `(?flags)` sets last until its group closes, across the alternation branches that follow,
 // as the translator's visitor has them.
 //
-// Kept as regex-syntax 0.8.4 has it: `\p{name!=value}` is translated as `\p{name=value}`
-// (the translator reads the class's `negated` field, not is_negated()).
+// One fix over 0.8.4 (grepper's PARITY B1): `\p{name!=value}` is negated, as regex-syntax
+// 0.8.12 has it (is_negated()); 0.8.4 read the `negated` field and matched `\p{name=value}`.
 
 Hir_Error_Kind :: enum {
 	Unicode_Not_Allowed, Invalid_Utf8, Invalid_Line_Terminator, Unicode_Property_Not_Found,
@@ -557,7 +557,7 @@ unicode_class :: proc(t: ^Translator, cls: Class_Unicode) -> (c: Hir_Class, err:
 	case .Property_Value_Not_Found: return c, terr(t, cls.span, .Unicode_Property_Value_Not_Found)
 	case .None:
 	}
-	fold_and_negate(t, cls.span, cls.negated, &c) or_return
+	fold_and_negate(t, cls.span, class_unicode_is_negated(cls), &c) or_return
 	return c, nil
 }
 

@@ -43,13 +43,18 @@ def main():
     a = ap.parse_args()
     print(f"{'search':26s} {'lines':>8s} {'grepper ms':>11s} {'rg ms':>8s} {'ratio':>6s}")
     for name, args in SEARCHES:
-        _, gc, go = run(a.grepper, args, a.corpus)
-        _, rc, ro = run(a.rg, args, a.corpus)
+        # a file as the corpus: searched alone, so the times are the search's, not the walk's
+        if os.path.isfile(a.corpus):
+            cwd, args = os.path.dirname(os.path.abspath(a.corpus)), args + [os.path.basename(a.corpus)]
+        else:
+            cwd = a.corpus
+        _, gc, go = run(a.grepper, args, cwd)
+        _, rc, ro = run(a.rg, args, cwd)
         if gc != rc or sorted(go.splitlines()) != sorted(ro.splitlines()):
             print(f"{name:26s} DIFFERENT output (rc {gc}/{rc}, lines {len(go.splitlines())}/{len(ro.splitlines())})")
             continue
-        g = min(run(a.grepper, args, a.corpus)[0] for _ in range(a.r))
-        r = min(run(a.rg, args, a.corpus)[0] for _ in range(a.r))
+        g = min(run(a.grepper, args, cwd)[0] for _ in range(a.r))
+        r = min(run(a.rg, args, cwd)[0] for _ in range(a.r))
         print(f"{name:26s} {len(ro.splitlines()):8d} {g * 1000:11.0f} {r * 1000:8.0f} {g / r:6.2f}")
     return 0
 

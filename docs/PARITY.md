@@ -188,6 +188,7 @@ already ships; "NVOL: new" one to write there. The order is the order of work.
 | P3 | accelerated DFA states: a state that loops on itself except for one to three bytes skips ahead with memchr, as regex-automata does | has: memchr, memchr2, memchr3 |
 | P4 | the lazy DFA in multi line mode (today `-U` runs on the PikeVM alone), and the cache size limits (`--dfa-size-limit`) | none |
 | P5 | the one-pass DFA and the bounded backtracker for capture groups (`-o`, `-r`, colours), as regex-automata's meta engine picks them | none |
+| P0 | real file input: a memory map (MapViewOfFile, mmap) where ripgrep maps, and reads of 64 KiB at a time otherwise; grepper reads every file whole first, so on one 523 MiB file `-l` takes 240 ms against rg's 45 ms (rg stops at the first match), and every row has a ~280 ms floor | none |
 | P6 | the benchmark again after P1-P5, on Windows and Linux, best of several idle runs; a row slower than rg is a pending item of its own | none |
 
 ### 2. Features of rg 14.1.1 still missing

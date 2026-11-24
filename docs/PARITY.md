@@ -136,7 +136,7 @@ recorded here as such.
 | #3581 #1764 | `-g !DIRNAME/` does not match when the working directory is `DIRNAME` | globs | todo |
 | #3605 #3604 | an ignore file stops being read at an invalid UTF-8 line | ignore | already: grepper reads the lines after it, with no message, as 16.0.0 |
 | #3527 | a lone `!` line in a gitignore is not a no-op | ignore | fixed |
-| #3477 | trailing spaces in gitignore patterns are parsed wrongly | ignore | todo |
+| #3477 | trailing spaces in gitignore patterns are parsed wrongly | ignore | fixed |
 | #2745 | glob character classes match the path separator | globset | todo |
 | #3609 #3603 | partial path components accepted when stripping prefixes | paths | todo |
 | #2958 | control codes in paths are printed raw | printer | todo |

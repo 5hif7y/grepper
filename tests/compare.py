@@ -401,6 +401,10 @@ RG_BUGS = [
     # everything, which brings back x.tmp and the hidden file
     ("ignore file with a lone !", "U3527", ["-l", "hit", "bang"], "tree5", True,
      (0, os.path.join("bang", "y.txt").encode() + b"\n")),
+    # "sp2\   ": rg 14.1.1 trims it to "sp2\", a parse error, and lists "sp2 "; the file
+    # list is compared, since Windows cannot open a name ending in a space
+    ("ignore file with trailing spaces", "U3477", ["--files", "space"], "tree5", True,
+     (0, os.path.join("space", "keep").encode() + b"\n")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it
@@ -466,6 +470,11 @@ TREE5 = {
     "bang/.hidden": b"hit\n",
     "bang/sub/.gitignore": b"!\n/\n",
     "bang/sub/z.tmp": b"hit\n",
+    # trailing spaces: "sp2\ " keeps one escaped space; "trail" loses its three
+    "space/.gitignore": b"sp2\\   \ntrail   \n",
+    "space/sp2 ": b"hit\n",
+    "space/trail": b"hit\n",
+    "space/keep": b"hit\n",
 }
 
 # parent-directory rules that name directories below the search root (PARITY B3)
@@ -482,6 +491,9 @@ def write_tree(name, files, mtimes=False):
     for i, (rel, data) in enumerate(sorted(files.items())):
         path = os.path.join(tree, *rel.split("/"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.name == "nt" and rel.endswith(" "):
+            # Win32 drops a trailing space from a name (abspath too); the \\?\ form keeps it
+            path = "\\\\?\\" + os.path.join(os.path.abspath(os.path.dirname(path)), rel.split("/")[-1])
         with open(path, "wb") as f:
             f.write(data)
         if mtimes:

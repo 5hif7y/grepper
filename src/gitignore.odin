@@ -50,10 +50,34 @@ trim_end_unicode :: proc(s: string) -> string {
 }
 
 // GitignoreBuilder::add_line; an error is the glob's, as ripgrep reports it
+// Trailing spaces are dropped unless escaped, as git does: `foo\   ` keeps `foo\ `. Fix over
+// 14.1.1 (ripgrep 16.0.0's #3477), which trimmed all trailing whitespace unless the line
+// ended in exactly `\ `, turning `foo\   ` into `foo\` and a parse error.
+@(private="file")
+trim_trailing_unescaped_spaces :: proc(line: string) -> string {
+	last_space := -1
+	i := 0
+	for i < len(line) {
+		switch line[i] {
+		case '\\':
+			if i + 1 >= len(line) { return line }
+			i += 2
+			last_space = -1
+		case ' ':
+			if last_space < 0 { last_space = i }
+			i += 1
+		case:
+			last_space = -1
+			i += 1
+		}
+	}
+	return line[:last_space] if last_space >= 0 else line
+}
+
 gitignore_add_line :: proc(g: ^Gitignore, line_in: string) -> (err: Maybe(string)) {
 	line := line_in
 	if strings.has_prefix(line, "#") { return nil }
-	if !strings.has_suffix(line, "\\ ") { line = trim_end_unicode(line) }
+	line = trim_trailing_unescaped_spaces(line)
 	if len(line) == 0 { return nil }
 	glob := Gitignore_Glob{original = line}
 	is_absolute := false

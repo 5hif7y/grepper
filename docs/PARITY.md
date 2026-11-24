@@ -224,9 +224,9 @@ already ships; "NVOL: new" one to write there. The order is the order of work.
 | T3 | a console harness for what rg does only on a terminal (#2958, colour defaults) |
 | T4 | the fuzzers (`regex_fuzz.py`, `multiline_fuzz.py`, `line_paths.py`) run over more seeds in one go |
 
-### 5. Decisions for the user
+### 5. Decisions
 
 | # | Question |
 |---|---|
-| D1 | PCRE2: link the C library (its JIT brings its own SIMD, outside NVOL), or port the subset rg users need on grepper's engine |
-| D2 | the features rg added after 14.1.1 (`--in`, `-G/--glob-not`, `RIPGREP_THREADS`, `--max-bytes`, POSIX classes in globs, jj repositories, `GIT_CONFIG_GLOBAL`): take them or stay at 14.1.1's flag set |
+| D1 | **Decided 2026-11-24:** nothing external. PCRE2's features are ported onto grepper's own engine, and every SIMD step they need is written in NVOL; no C library is linked |
+| D2 | **Decided 2026-11-24:** the flags rg added after 14.1.1 (`--in`, `-G/--glob-not`, `RIPGREP_THREADS`, `--max-bytes`, POSIX classes in globs, jj repositories, `GIT_CONFIG_GLOBAL`) are taken where useful, under names of grepper's own: generic where possible, and never naming grepper or ripgrep (an environment variable such as `RIPGREP_THREADS` gets a generic name). Each is decided when it is ported |

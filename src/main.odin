@@ -137,8 +137,23 @@ build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
 			strings.write_string(&b, rg_escape(p) if h.fixed_strings else p)
 			strings.write_byte(&b, ')')
 		}
-		if _, perr := regex_parse(strings.to_string(b)); perr != nil {
+		pattern := strings.to_string(b)
+		ast, perr := regex_parse(pattern)
+		if perr != nil {
 			return m, suggest_pcre2(ast_error_string(perr.?))
+		}
+		t := Translator{
+			pattern = pattern,
+			utf8 = false,
+			line_terminator = '\n',
+		}
+		if rg_is_case_insensitive(h, ast) { t.flags.case_insensitive = true }
+		t.flags.multi_line = true
+		if h.multiline && h.multiline_dotall { t.flags.dot_matches_new_line = true }
+		if h.crlf { t.flags.crlf = true }
+		if h.no_unicode { t.flags.unicode = false }
+		if _, terr := translate(&t, ast); terr != nil {
+			return m, hir_error_string(terr.?)
 		}
 	}
 	ignore_case := h.case_mode == .Insensitive

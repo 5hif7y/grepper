@@ -81,6 +81,8 @@ Hi_Args :: struct {
 	follow:               bool,
 	one_file_system:      bool,
 	sort:                 Maybe(Sort_Mode),
+	no_unicode:           bool,
+	multiline_dotall:     bool,
 }
 
 // What grepper does not do yet: an error, never a silently different search.
@@ -306,6 +308,8 @@ hi_from_low :: proc(low: ^Low_Args) -> (h: Hi_Args, err: string) {
 	h.follow = low.follow
 	h.one_file_system = low.one_file_system
 	h.sort = low.sort
+	h.no_unicode = low.no_unicode
+	h.multiline_dotall = low.multiline_dotall
 
 	// file types: the defaults, then each --type-add/--type-clear/-t/-T in order
 	tb: Types_Builder

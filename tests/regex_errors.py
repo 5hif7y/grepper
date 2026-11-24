@@ -18,6 +18,10 @@ PATTERNS = [
     "\\", "\\q", "\\x{}", "\\x{zz}", "[\\d-z]", "[a-\\w]", "\\b{start", "[[:alpha:]",
     "(", ")", "a||b(", "\\pN", "\\P{", "\\p\\", "[]", "[^]", "\\u{D800}", "\\x{ 41 }",
     "a\n\nb)\nc", "(?x)a #b\n(", "\\cA", "\\K", "(?<=a)b", "(?!a)", "(?i)(?i)",
+    # translation (HIR) errors
+    "\\p{Foo}", "\\p{sc=Foo}", "\\p{Foo=Bar}", "\\pQ", "(?-u)\\p{L}", "(?-u)[é]", "(?-u)[a-é]",
+    "\\p{age=99}", "\\p{gcb=Nope}", "\\p{isc}", "\\p{Greek}", "\\p{scx=Grek}", "\\p{wb=ALetter}",
+    "[\\p{Foo}]", "(?-u:\\pL)",
 ]
 
 

@@ -26,10 +26,18 @@ DFA_UNKNOWN :: -1
 DFA_MATCH   :: -2      // a match ends where the byte would be read
 DFA_QUIT    :: -3
 DFA_NO_EOI  :: -4      // at the end: no match
-// A transition into a state the search must act on when it enters it: DFA_TAG - (target * 2
+DFA_DEAD    :: -5      // no thread left (leftmost-first and All modes)
+// A transition into a state the search must act on when it enters it: DFA_TAG - (target * 4
 // + kind), kind 0 for a start state when there is a prefilter (skip with the prefilter),
-// kind 1 for an accelerated state (skip to its next escape byte).
+// kind 1 for an accelerated state (skip to its next escape byte), kind 2 for a match state
+// (leftmost-first and All modes: a match ends, or starts, where the byte was read).
 DFA_TAG :: -16
+
+// What a DFA answers. Earliest: where the first match ends (the line search). Leftmost_First:
+// where the leftmost-first match ends, as the meta engine's forward lazy DFA finds it.
+// All: run anchored over the reverse NFA, where that match starts (the reverse lazy DFA,
+// built with MatchKind::All).
+Dfa_Mode :: enum u8 { Earliest, Leftmost_First, All }
 
 // Acceleration, which regex-automata gives its dense DFAs and not its lazy one: a state that
 // goes back to itself on every byte but one to three "escape" bytes skips ahead to the next
@@ -42,6 +50,11 @@ Dfa_State :: struct {
 	is_start: bool,          // no seeds: only the unanchored start's closure is alive
 	ctx:   Dfa_Ctx,
 	seeds: []i32,
+	// leftmost-first and All modes: whether the unanchored prefix is still alive (it is
+	// dropped with every thread of lower priority than a match), and whether the set this
+	// state came from reached a match (regex-automata's matches delayed by one byte)
+	unanchored: bool,
+	is_match:   bool,
 	accel_checked: bool,
 	accel_n:       int,      // escape bytes, 1 to 3 (or 0 with accel set: none at all)
 	accel:         bool,
@@ -49,6 +62,9 @@ Dfa_State :: struct {
 }
 
 Lazy_Dfa :: struct {
+	mode:         Dfa_Mode,
+	rev:          bool,           // over a reverse NFA: the previous byte is the next one up
+	unanchored:   bool,           // leftmost-first: the start states hold the unanchored prefix
 	nfa:          ^Rx_NFA,
 	pre:          ^Prefilter,     // the NFA's prefilter, this DFA's own copy
 	states:       [dynamic]Dfa_State,
@@ -73,9 +89,14 @@ Lazy_Dfa :: struct {
 	start_ids:    [Dfa_Ctx]i32, // the start state per context once built (-1: not yet)
 }
 
-dfa_new :: proc(n: ^Rx_NFA) -> (d: Lazy_Dfa) {
+// a leftmost-first DFA is unanchored unless the regex is anchored at the start; an All DFA
+// runs anchored over a reverse NFA
+dfa_new :: proc(n: ^Rx_NFA, mode := Dfa_Mode.Earliest, unanchored := true) -> (d: Lazy_Dfa) {
+	d.mode = mode
+	d.rev = n.reverse
+	d.unanchored = unanchored && mode == .Leftmost_First
 	d.nfa = n
-	d.pre = prefilter_clone(n.pre)
+	d.pre = prefilter_clone(n.pre) if mode != .All else nil
 	for &x in d.start_ids { x = -1 }
 	d.mark = make([]u32, len(n.states))
 	d.budget = 4096
@@ -96,7 +117,9 @@ dfa_new :: proc(n: ^Rx_NFA) -> (d: Lazy_Dfa) {
 			case .Start_CRLF:
 				need_start, need_lf, need_cr = true, true, true
 			case .End_CRLF:
-				need_cr = true
+				// backwards it asks whether the byte above is a \n, forwards whether the
+				// byte below is a \r
+				if d.rev { need_lf = true } else { need_cr = true }
 			}
 		}
 	}
@@ -116,7 +139,7 @@ dfa_new :: proc(n: ^Rx_NFA) -> (d: Lazy_Dfa) {
 }
 
 dfa_clone :: proc(d: Lazy_Dfa) -> (c: Lazy_Dfa) {
-	return dfa_new(d.nfa)
+	return dfa_new(d.nfa, d.mode, d.unanchored)
 }
 
 @(private="file")
@@ -131,9 +154,12 @@ byte_ctx :: #force_inline proc(b: u8) -> Dfa_Ctx {
 }
 
 // the look-around at a position whose previous byte has class prev and whose next byte is
-// next (256 for the end); quit when it cannot be decided from them
+// next (256 for the end); quit when it cannot be decided from them. Backwards (rev), the
+// previous byte is the one above the position and the next the one below; the looks of a
+// reverse NFA are mirrored, so the same tests hold, but for the CRLF anchors, whose \r\n
+// reads \n\r backwards (the determinizer's is_half_crlf handling)
 @(private="file")
-dfa_look :: proc(l: Look, prev: Dfa_Ctx, next: int) -> (ok: bool, quit: bool) {
+dfa_look :: proc(l: Look, prev: Dfa_Ctx, next: int, rev: bool) -> (ok: bool, quit: bool) {
 	eoi := next == 256
 	nb := u8(next) if !eoi else 0
 	before_word := prev == .Word
@@ -147,8 +173,12 @@ dfa_look :: proc(l: Look, prev: Dfa_Ctx, next: int) -> (ok: bool, quit: bool) {
 	case .End: return eoi, false
 	case .Start_LF: return prev == .Start || prev == .LF, false
 	case .End_LF: return eoi || nb == '\n', false
-	case .Start_CRLF: return prev == .Start || prev == .LF || (prev == .CR && (eoi || nb != '\n')), false
-	case .End_CRLF: return eoi || nb == '\r' || (nb == '\n' && prev != .CR), false
+	case .Start_CRLF:
+		if rev { return prev == .Start || prev == .CR || (prev == .LF && (eoi || nb != '\r')), false }
+		return prev == .Start || prev == .LF || (prev == .CR && (eoi || nb != '\n')), false
+	case .End_CRLF:
+		if rev { return eoi || nb == '\n' || (nb == '\r' && prev != .LF), false }
+		return eoi || nb == '\r' || (nb == '\n' && prev != .CR), false
 	case .Word_Ascii, .Word_Unicode: return before_word != after_word, false
 	case .Word_Ascii_Negate, .Word_Unicode_Negate: return before_word == after_word, false
 	case .Word_Start_Ascii, .Word_Start_Unicode: return !before_word && after_word, false
@@ -160,15 +190,20 @@ dfa_look :: proc(l: Look, prev: Dfa_Ctx, next: int) -> (ok: bool, quit: bool) {
 }
 
 @(private="file")
-state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32) -> i32 {
+state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32, unanchored := false, is_match := false) -> i32 {
 	clear(&d.key)
-	append(&d.key, u8(ctx))
+	append(&d.key, u8(ctx) | (u8(unanchored) << 4) | (u8(is_match) << 5))
 	for s in seeds {
 		x := u32(s)
 		append(&d.key, u8(x), u8(x >> 8), u8(x >> 16), u8(x >> 24))
 	}
 	if id, ok := d.index[string(d.key[:])]; ok { return id }
-	st := Dfa_State{ctx = ctx, seeds = slice.clone(seeds), is_start = len(seeds) == 0}
+	st := Dfa_State{ctx = ctx, seeds = slice.clone(seeds), unanchored = unanchored, is_match = is_match}
+	switch d.mode {
+	case .Earliest: st.is_start = len(seeds) == 0
+	case .Leftmost_First: st.is_start = len(seeds) == 0 && unanchored && !is_match
+	case .All:
+	}
 	append(&d.states, st)
 	base := len(d.trans)
 	resize(&d.trans, base + DFA_STRIDE)
@@ -181,7 +216,14 @@ state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32) -> i32 {
 @(private="file")
 start_state :: #force_inline proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx) -> i32 {
 	if id := d.start_ids[ctx]; id >= 0 { return id }
-	id := state_for(d, ctx, nil)
+	id: i32
+	if d.mode == .Earliest || d.unanchored {
+		id = state_for(d, ctx, nil, d.unanchored)
+	} else {
+		// anchored: the regex's start is the only seed
+		seed := [1]i32{d.nfa.start}
+		id = state_for(d, ctx, seed[:])
+	}
 	d.start_ids[ctx] = id
 	return id
 }
@@ -200,6 +242,7 @@ dfa_reset :: proc(d: ^Lazy_Dfa) {
 // the transition of state sid on next (a byte, or 256 for the end)
 @(private="file")
 compute :: proc(d: ^Lazy_Dfa, sid: i32, next: int) -> (to: i32, reset: bool) {
+	if d.mode != .Earliest { return compute_ordered(d, sid, next) }
 	n := d.nfa
 	st := &d.states[sid]
 	ctx := st.ctx
@@ -219,7 +262,7 @@ compute :: proc(d: ^Lazy_Dfa, sid: i32, next: int) -> (to: i32, reset: bool) {
 		case .Union:
 			#reverse for a in s.alts { append(&d.stack, a) }
 		case .Look:
-			ok, quit := dfa_look(s.look, ctx, next)
+			ok, quit := dfa_look(s.look, ctx, next, false)
 			if quit { return DFA_QUIT, false }
 			if ok { append(&d.stack, s.next) }
 		case .Capture:
@@ -264,8 +307,9 @@ Dfa_Result :: enum { No_Match, Match, Quit }
 encode :: #force_inline proc(d: ^Lazy_Dfa, to: i32) -> i32 {
 	if to < 0 { return to }
 	base := to * DFA_STRIDE
-	if d.pre != nil && d.states[to].is_start { return DFA_TAG - base * 2 }
-	if d.states[to].accel { return DFA_TAG - (base * 2 + 1) }
+	if d.states[to].is_match { return DFA_TAG - (base * 4 + 2) }
+	if d.pre != nil && d.states[to].is_start { return DFA_TAG - base * 4 }
+	if d.states[to].accel { return DFA_TAG - (base * 4 + 1) }
 	return base
 }
 
@@ -296,7 +340,7 @@ check_accel :: proc(d: ^Lazy_Dfa, sid: i32) {
 	}
 	st = &d.states[sid]
 	st.accel, st.accel_n, st.escapes = true, n, escapes
-	tagged := DFA_TAG - (i32(base) * 2 + 1)
+	tagged := DFA_TAG - (i32(base) * 4 + 1)
 	for &t in d.trans {
 		if t == i32(base) { t = tagged }
 	}
@@ -370,9 +414,9 @@ dfa_find_earliest :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r
 		case next == DFA_QUIT: return i, .Quit
 		case next <= DFA_TAG:
 			v := int(DFA_TAG - next)
-			cur = v >> 1
+			cur = v >> 2
 			i += 1
-			if v & 1 == 0 {
+			if v & 3 == 0 {
 				if i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
 			} else if i < end {
 				i = accel_skip(d, h, i, cur, end)
@@ -397,4 +441,213 @@ dfa_find_earliest :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r
 	case DFA_QUIT: return end, .Quit
 	}
 	return 0, .No_Match
+}
+
+// ---------------------------------------------------------------------------------------------
+// Leftmost-first and All (util/determinize's next with MatchKind::LeftmostFirst and All)
+
+// The transition of state sid on next for the ordered modes. The NFA states of a set keep
+// their priority order (a depth-first closure, the first occurrence kept); the unanchored
+// prefix, a lazy `(?s-u:.)*?`, comes last. A match in the closure makes the next state a
+// match state and, leftmost-first, cuts every thread after it, the unanchored prefix too.
+@(private="file")
+compute_ordered :: proc(d: ^Lazy_Dfa, sid: i32, next: int) -> (to: i32, reset: bool) {
+	n := d.nfa
+	st := &d.states[sid]
+	ctx := st.ctx
+	unanchored := st.unanchored
+	d.gen += 1
+	if d.gen == 0 { slice.fill(d.mark, 0); d.gen = 1 }
+	clear(&d.closure)
+	clear(&d.stack)
+	if unanchored { append(&d.stack, n.start) }
+	#reverse for s in st.seeds { append(&d.stack, s) }
+	for len(d.stack) > 0 {
+		id := pop(&d.stack)
+		if d.mark[id] == d.gen { continue }
+		d.mark[id] = d.gen
+		s := &n.states[id]
+		switch s.kind {
+		case .Union:
+			#reverse for a in s.alts { append(&d.stack, a) }
+		case .Look:
+			ok, quit := dfa_look(s.look, ctx, next, d.rev)
+			if quit { return DFA_QUIT, false }
+			if ok { append(&d.stack, s.next) }
+		case .Capture:
+			append(&d.stack, s.next)
+		case .Fail:
+		case .Match, .Range, .Sparse:
+			append(&d.closure, id)
+		}
+	}
+	leftmost := d.mode == .Leftmost_First
+	if next == 256 {
+		for id in d.closure {
+			if n.states[id].kind == .Match { return DFA_MATCH, false }
+		}
+		return DFA_NO_EOI, false
+	}
+	b := u8(next)
+	clear(&d.next)
+	matched := false
+	scan: for id in d.closure {
+		s := &n.states[id]
+		#partial switch s.kind {
+		case .Match:
+			matched = true
+			if leftmost { break scan }
+		case .Range:
+			if s.lo <= b && b <= s.hi { append(&d.next, s.next) }
+		case .Sparse:
+			for t in s.trans {
+				if t.lo <= b && b <= t.hi { append(&d.next, t.next); break }
+			}
+		}
+	}
+	// the unanchored prefix's own byte state, last in the set, loops on every byte
+	next_unanchored := unanchored && !matched
+	seeds: []i32
+	if leftmost {
+		// the first occurrence of each target keeps its place
+		d.gen += 1
+		if d.gen == 0 { slice.fill(d.mark, 0); d.gen = 1 }
+		k := 0
+		for t in d.next {
+			if d.mark[t] == d.gen { continue }
+			d.mark[t] = d.gen
+			d.next[k] = t
+			k += 1
+		}
+		seeds = d.next[:k]
+	} else {
+		// All: the order of the threads cannot change the answer
+		slice.sort(d.next[:])
+		seeds = slice.unique(d.next[:])
+	}
+	if len(seeds) == 0 && !next_unanchored && !matched { return DFA_DEAD, false }
+	if len(d.states) >= d.budget {
+		ctx_next := d.ctx_of[b]
+		kept := slice.clone(seeds, context.temp_allocator)
+		dfa_reset(d)
+		return state_for(d, ctx_next, kept, next_unanchored, matched), true
+	}
+	return state_for(d, d.ctx_of[b], seeds, next_unanchored, matched), false
+}
+
+// the encoded transition of the state at cur on next, computed when unknown
+@(private="file")
+transition :: #force_inline proc(d: ^Lazy_Dfa, cur: ^int, next: int, accel: bool) -> i32 {
+	t := d.trans[cur^ + next]
+	if t != DFA_UNKNOWN { return t }
+	sid := i32(cur^ / DFA_STRIDE)
+	to, reset := compute(d, sid, next)
+	t = encode(d, to)
+	if !reset {
+		d.trans[cur^ + next] = t
+		if accel && to == sid && !d.states[sid].accel_checked {
+			check_accel(d, sid)
+			t = d.trans[cur^ + next]
+		}
+	}
+	return t
+}
+
+// hybrid::search::find_fwd, leftmost-first: the end of the leftmost-first match in
+// h[start:end); look-behind sees h[start-1], and h[end] (or the end of h) is the look-ahead
+// at the end
+dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa_Result) {
+	ctx := d.start_ctx
+	if start > 0 { ctx = d.ctx_of[h[start - 1]] }
+	i := start
+	mat := -1
+	cur := int(start_state(d, ctx)) * DFA_STRIDE
+	if d.pre != nil && i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
+	for i < end {
+		tbl := d.trans[:]
+		#no_bounds_check for i < end {
+			next := tbl[cur + int(h[i])]
+			if next < 0 { break }
+			cur = int(next)
+			i += 1
+		}
+		if i >= end { break }
+		next := transition(d, &cur, int(h[i]), true)
+		switch {
+		case next == DFA_DEAD: return mat, .Match if mat >= 0 else .No_Match
+		case next == DFA_QUIT: return i, .Quit
+		case next <= DFA_TAG:
+			v := int(DFA_TAG - next)
+			cur = v >> 2
+			kind := v & 3
+			if kind == 2 { mat = i }
+			i += 1
+			if kind == 0 {
+				if i < end && !prefilter_skip(d, h, &i, &cur, end) {
+					return mat, .Match if mat >= 0 else .No_Match
+				}
+			} else if kind == 1 && i < end {
+				i = accel_skip(d, h, i, cur, end)
+			}
+		case:
+			cur = int(next)
+			i += 1
+		}
+	}
+	// eoi_fwd: the byte after the end, or the end of the input
+	t: i32
+	if end < len(h) {
+		t = transition(d, &cur, int(h[end]), false)
+		if t <= DFA_TAG && int(DFA_TAG - t) & 3 == 2 { mat = end }
+	} else {
+		t = transition(d, &cur, 256, false)
+		if t == DFA_MATCH { mat = end }
+	}
+	if t == DFA_QUIT { return end, .Quit }
+	return mat, .Match if mat >= 0 else .No_Match
+}
+
+// hybrid::search::find_rev with an anchored input: the start of the longest match of the
+// reverse NFA ending at end and starting at or after start (MatchKind::All keeps the last
+// match found going backwards); look-behind sees h[end], look-ahead h[start-1]
+dfa_find_rev :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa_Result) {
+	ctx := d.start_ctx
+	if end < len(h) { ctx = d.ctx_of[h[end]] }
+	i := end
+	mat := -1
+	cur := int(start_state(d, ctx)) * DFA_STRIDE
+	for i > start {
+		tbl := d.trans[:]
+		#no_bounds_check for i > start {
+			next := tbl[cur + int(h[i - 1])]
+			if next < 0 { break }
+			cur = int(next)
+			i -= 1
+		}
+		if i <= start { break }
+		next := transition(d, &cur, int(h[i - 1]), false)
+		switch {
+		case next == DFA_DEAD: return mat, .Match if mat >= 0 else .No_Match
+		case next == DFA_QUIT: return i, .Quit
+		case next <= DFA_TAG:
+			// only match states are tagged here: no prefilter, no acceleration
+			cur = int(DFA_TAG - next) >> 2
+			mat = i
+			i -= 1
+		case:
+			cur = int(next)
+			i -= 1
+		}
+	}
+	// eoi_rev: the byte before the start, or the start of the input
+	t: i32
+	if start > 0 {
+		t = transition(d, &cur, int(h[start - 1]), false)
+		if t <= DFA_TAG { mat = start }
+	} else {
+		t = transition(d, &cur, 256, false)
+		if t == DFA_MATCH { mat = start }
+	}
+	if t == DFA_QUIT { return start, .Quit }
+	return mat, .Match if mat >= 0 else .No_Match
 }

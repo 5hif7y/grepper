@@ -110,6 +110,7 @@ Rx_NFA :: struct {
 	slots:       int,              // 2 per capture group, group 0 included
 	group_names: [dynamic]Maybe(string),
 	pre:         ^Prefilter,       // where a match may start, from the regex's prefixes (nil: none)
+	reverse:     bool,             // compiled to match backwards, without capture states
 }
 
 Rx_Ref :: struct { start, end: i32 }
@@ -145,6 +146,40 @@ rx_compile :: proc(h: ^Hir) -> (n: Rx_NFA) {
 	return
 }
 
+// the compiler with reverse(true) and which_captures(None), as the meta engine builds the NFA
+// of its reverse lazy DFA: concatenations and literals in reverse order, the UTF-8 sequences of
+// classes reversed, look-around mirrored, no capture states (group 0 included)
+rx_compile_reverse :: proc(h: ^Hir) -> (n: Rx_NFA) {
+	n.reverse = true
+	ref := c(&n, h)
+	m := add_state(&n, {kind = .Match})
+	patch(&n, ref.end, m)
+	n.start = ref.start
+	rx_finish(&n)
+	return
+}
+
+// Look::reversed
+look_reversed :: proc(l: Look) -> Look {
+	#partial switch l {
+	case .Start: return .End
+	case .End: return .Start
+	case .Start_LF: return .End_LF
+	case .End_LF: return .Start_LF
+	case .Start_CRLF: return .End_CRLF
+	case .End_CRLF: return .Start_CRLF
+	case .Word_Start_Ascii: return .Word_End_Ascii
+	case .Word_End_Ascii: return .Word_Start_Ascii
+	case .Word_Start_Unicode: return .Word_End_Unicode
+	case .Word_End_Unicode: return .Word_Start_Unicode
+	case .Word_Start_Half_Ascii: return .Word_End_Half_Ascii
+	case .Word_End_Half_Ascii: return .Word_Start_Half_Ascii
+	case .Word_Start_Half_Unicode: return .Word_End_Half_Unicode
+	case .Word_End_Half_Unicode: return .Word_Start_Half_Unicode
+	}
+	return l
+}
+
 @(private="file")
 nfa_group_names :: proc(h: ^Hir, names: ^[dynamic]Maybe(string)) {
 	#partial switch h.kind {
@@ -166,7 +201,8 @@ c :: proc(n: ^Rx_NFA, h: ^Hir) -> Rx_Ref {
 		return {e, e}
 	case .Literal:
 		first := Rx_Ref{-1, -1}
-		for b in h.lit {
+		for k in 0 ..< len(h.lit) {
+			b := h.lit[len(h.lit) - 1 - k] if n.reverse else h.lit[k]
 			id := add_state(n, {kind = .Range, lo = b, hi = b})
 			if first.start < 0 { first.start = id } else { patch(n, first.end, id) }
 			first.end = id
@@ -175,16 +211,22 @@ c :: proc(n: ^Rx_NFA, h: ^Hir) -> Rx_Ref {
 	case .Class:
 		return c_class(n, h.class)
 	case .Look:
-		id := add_state(n, {kind = .Look, look = h.look})
+		id := add_state(n, {kind = .Look, look = look_reversed(h.look) if n.reverse else h.look})
 		return {id, id}
 	case .Repetition:
 		return c_repetition(n, h)
 	case .Capture:
+		if n.reverse { return c(n, h.sub) }
 		return c_cap(n, h.index, h.sub)
 	case .Concat:
-		r := c(n, h.subs[0])
-		for s in h.subs[1:] {
-			x := c(n, s)
+		// c_concat: the last expression first in reverse
+		count := len(h.subs)
+		sub_at :: proc(n: ^Rx_NFA, h: ^Hir, k: int) -> ^Hir {
+			return h.subs[len(h.subs) - 1 - k] if n.reverse else h.subs[k]
+		}
+		r := c(n, sub_at(n, h, 0))
+		for k in 1 ..< count {
+			x := c(n, sub_at(n, h, k))
 			patch(n, r.end, x.start)
 			r.end = x.end
 		}
@@ -233,7 +275,8 @@ c_class :: proc(n: ^Rx_NFA, cls: Hir_Class) -> Rx_Ref {
 	for seq in seqs {
 		prev: i32 = -1
 		first: i32 = -1
-		for k in 0 ..< seq.n {
+		for j in 0 ..< seq.n {
+			k := seq.n - 1 - j if n.reverse else j
 			id := add_state(n, {kind = .Range, lo = seq.ranges[k].lo, hi = seq.ranges[k].hi})
 			if first < 0 { first = id } else { patch(n, prev, id) }
 			prev = id

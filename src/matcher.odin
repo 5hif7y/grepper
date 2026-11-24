@@ -23,6 +23,11 @@ Matcher :: struct {
 	cache:    Pike_Cache,
 	slots:    []int,
 	dfa:      Lazy_Dfa,
+	// the meta engine's hybrid regex: a forward leftmost-first lazy DFA for the end of a
+	// match, a reverse one (MatchKind::All, over nfa_rev) for its start
+	nfa_rev:  ^Rx_NFA,
+	dfa_fwd:  Lazy_Dfa,
+	dfa_rev:  Lazy_Dfa,
 	lit_slots: [2]int,     // group 0 of the last matcher_captures_at, for the literal kinds
 	bt:        Backtrack_Cache,
 	bt_max:    int,        // the longest haystack the backtracker takes
@@ -45,6 +50,8 @@ matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 		c.bt = backtrack_cache_new(m.nfa)
 		c.slots = make([]int, m.nfa.slots)
 		c.dfa = dfa_new(m.nfa)
+		c.dfa_fwd = dfa_clone(m.dfa_fwd)
+		c.dfa_rev = dfa_clone(m.dfa_rev)
 	}
 	return
 }
@@ -137,7 +144,38 @@ matcher_pike :: proc(h: ^Hir, pre: ^Prefilter) -> (m: Matcher) {
 	m.bt_max = backtrack_max_haystack_len(m.nfa)
 	m.slots = make([]int, m.nfa.slots)
 	m.dfa = dfa_new(m.nfa)
+	m.nfa_rev = new(Rx_NFA)
+	m.nfa_rev^ = rx_compile_reverse(h)
+	// regex-automata leaves the unanchored prefix out of an NFA anchored at the start
+	m.dfa_fwd = dfa_new(m.nfa, .Leftmost_First, !look_set_contains(h.props.look_set_prefix, .Start))
+	m.dfa_rev = dfa_new(m.nfa_rev, .All)
 	return
+}
+
+// hybrid::regex::Regex::try_search: the end of the leftmost-first match from the forward
+// DFA, then its start from the reverse DFA run anchored at that end; Quit when either gives up
+@(private="file")
+find_dfa :: proc(m: ^Matcher, h: []u8, start, end: int) -> (s, e: int, r: Dfa_Result) {
+	e, r = dfa_find_fwd(&m.dfa_fwd, h, start, end)
+	if r != .Match { return }
+	// an empty match at the start, or a regex anchored at the start: no reverse search
+	if e == start || !m.dfa_fwd.unanchored { return start, e, .Match }
+	at, rr := dfa_find_rev(&m.dfa_rev, h, start, e)
+	if rr == .Quit { return 0, 0, .Quit }
+	assert(rr == .Match, "reverse search must match if forward search does")
+	return at, e, .Match
+}
+
+// the leftmost-first match and its capture groups in m.slots: the bounded backtracker when
+// the span fits it, else the PikeVM, as the meta engine orders them for a search with slots
+@(private="file")
+find_slots :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
+	if end - start <= m.bt_max {
+		if !backtrack_search(m.nfa, &m.bt, hay[:end], start, end, m.slots) { return }
+	} else if !pike_search(m.nfa, &m.cache, hay[:end], start, end, false, m.slots) {
+		return
+	}
+	return m.slots[0], m.slots[1], true
 }
 
 // whether a match ends in hay[start:], and where the first does: the lazy DFA, or the
@@ -191,8 +229,12 @@ matcher_find_candidate_line :: proc(m: ^Matcher, buf: []u8) -> (at: int, confirm
 // grep-matcher's captures_at: the leftmost-first match in hay[at:] and its capture groups,
 // read back with matcher_group
 matcher_captures_at :: proc(m: ^Matcher, hay: []u8, at: int) -> bool {
+	if m.kind == .Pike {
+		_, _, ok := find_slots(m, hay, at, len(hay))
+		return ok
+	}
 	s, e, ok := find(m, hay, at, len(hay))
-	if ok && m.kind != .Pike { m.lit_slots = {s, e} }
+	if ok { m.lit_slots = {s, e} }
 	return ok
 }
 
@@ -230,14 +272,15 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 		}
 		return s, e, best >= 0
 	case .Pike:
-		// the meta engine's order for a search with capture slots: the bounded backtracker
-		// when the span fits it, else the PikeVM
-		if end - start <= m.bt_max {
-			if !backtrack_search(m.nfa, &m.bt, hay[:end], start, end, m.slots) { return }
-		} else if !pike_search(m.nfa, &m.cache, hay[:end], start, end, false, m.slots) {
-			return
+		// Core::search without capture groups: the lazy DFAs, and the engines with slots
+		// when they give up
+		ds, de, r := find_dfa(m, hay[:end], start, end)
+		switch r {
+		case .Match: return ds, de, true
+		case .No_Match: return
+		case .Quit:
 		}
-		return m.slots[0], m.slots[1], true
+		return find_slots(m, hay, start, end)
 	}
 	return
 }

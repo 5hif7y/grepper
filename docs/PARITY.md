@@ -38,7 +38,7 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 | hyperlinks | `--hyperlink-format --hostname-bin` | todo |
 | stdin when no path and stdin is not a terminal; `-` as a path | | done |
 | search binary files | `--binary -a` | done |
-| line terminators | `--crlf --null-data` | todo: the searcher and printers handle them; the regex side is missing |
+| line terminators | `--crlf --null-data` | done |
 | stop on the first non-matching line after a match | `--stop-on-nonmatch` | done |
 | memory maps | `--mmap --no-mmap` | done |
 
@@ -46,15 +46,15 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 
 | Feature | Flags | Status |
 |---|---|---|
-| ripgrep's regex syntax, parsed by a port of regex-syntax (errors as ripgrep's) | | partial: Odin's `core:text/regex` |
-| Unicode classes, `\p{..}`, Unicode `\d \w \s \b`, simple case folding | | todo |
-| case modes | `-i -s -S` | partial: `-i` ASCII only |
-| word and line patterns | `-w -x` | todo |
+| ripgrep's regex syntax, parsed by a port of regex-syntax (errors as ripgrep's) | | done |
+| Unicode classes, `\p{..}`, Unicode `\d \w \s \b`, simple case folding | | done |
+| case modes | `-i -s -S` | done |
+| word and line patterns | `-w -x` | done |
 | multiline | `-U --multiline-dotall` | todo |
-| no Unicode | `--no-unicode` | todo |
+| no Unicode | `--no-unicode` | done |
 | patterns from a file | `-f` | done |
-| literal extraction (prefixes, inner, suffixes) feeding NVOL prefilters | | partial: one required literal |
-| engines: lazy DFA, PikeVM, bounded backtracker, one-pass | `--engine --dfa-size-limit --regex-size-limit` | todo |
+| literal extraction (prefixes, inner, suffixes) feeding NVOL prefilters | | partial: patterns that are only literals go to NVOL memmem or Teddy; a regex has no prefilter yet |
+| engines: lazy DFA, PikeVM, bounded backtracker, one-pass | `--engine --dfa-size-limit --regex-size-limit` | partial: lazy DFA and PikeVM; the size limits are parsed and not applied; `--engine` is refused |
 | PCRE2 | `-P --pcre2-version` | todo: ripgrep links PCRE2 (C); decide later |
 
 ## 3. Walk and filters (ignore, globset)

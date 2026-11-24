@@ -3,9 +3,17 @@
 Every flag and behaviour of ripgrep 14.1.1, and where grepper stands on it. A row is done only
 when `tests/compare.py` has cases for it that match ripgrep byte for byte (stdout and exit code).
 
+The exception is ripgrep's own bugs (section 6): grepper fixes them instead of copying them. A
+fixed bug's case carries the expected output, and the test also runs rg 14.1.1 and reports
+whether it still shows the bug, so the difference stays documented.
+
 SIMD rule: every vectorised step is an NVOL kernel. Where ripgrep's dependencies use SIMD that
 NVOL lacks, the kernel is written in NVOL first (with its tests against NVOL's interpreter and
 its benchmark against the crate it replaces), then used here.
+
+Speed: grepper is meant to beat ripgrep on every row of `tests/bench.py`, not to tie it.
+NVOL is grepper's own SIMD, so a slow row is fixed in NVOL (a new or better kernel) or in
+how grepper uses it, never accepted as a limit of a dependency.
 
 Status: `done`, `partial` (what is missing is said), `todo`.
 
@@ -92,6 +100,58 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 | help, version, man page and completions | `-h --help -V --generate` | partial: grepper's own help and version text |
 | threads | `-j` | done |
 
+## 6. ripgrep 14.1.1 bugs that grepper fixes
+
+Status: `todo`, `fixed` (with its case in `tests/compare.py`), `already` (grepper never had it).
+
+### Found during the port
+
+Each one reproduced with rg 14.1.1 on Windows.
+
+| # | Bug | Reproduction | Upstream | Status |
+|---|---|---|---|---|
+| B1 | `\p{name!=value}` matches as `\p{name=value}`: regex-syntax 0.8.4's translator reads the class's `negated` field instead of `is_negated()` | `printf 'alpha \xce\xb1\xce\xb2\n' \| rg -o '\p{sc!=Greek}+'` prints `αβ` | fixed in regex-syntax 0.8.12 (`is_negated()`) | todo |
+| B2 | Parent-directory ignore rules with several roots depend on root order and thread scheduling: the cached ancestor nodes keep the `absolute_base` of the root that built them | in `tests/fixtures/tree` (`.gitignore` has `docs/**/draft*`), `rg -l alpha src docs` prints `docs\a\b\draft1.md` in 6 of 8 runs; with `-j1` in 8 of 8; `rg -l alpha docs` in 0 of 8 | 15.2.0, BUG #3320 #3376 #3419 | todo |
+| B3 | Parent-directory ignore rules miss paths below the root: the path is made absolute after stripping the matching node's directory, not the root's, so the directories between them are lost | a git repo with `.gitignore` = `docs/a/b/draft*`: `rg -l alpha docs` prints `docs\a\b\draft1.md`, which `git check-ignore` ignores | 15.0.0, BUG #829 #2731 #2747 #2770 #2778 #2836 #2933 #3067 | todo |
+| B4 | A NUL past the first 64 KiB fill: which lines print before the binary cut depends on how many bytes each read returns | three identical runs of an 8-literal search over the Research-LLOG tree printed 0, 8 and 8 lines of `ripgrep/tests/data/sherlock-nul.txt` (NUL at 77041) | not reported | already: grepper models full reads and prints the same lines every run |
+
+### Fixed upstream after 14.1.1
+
+From ripgrep's CHANGELOG (15.0.0 to 16.0.0), the fixes that touch what grepper ports. Each is
+reproduced against rg 14.1.1 before it is fixed; one that does not reproduce on Windows is
+recorded here as such.
+
+| Upstream | Bug | Area | Status |
+|---|---|---|---|
+| #1332 #3001 | `rg -vf file` with an empty `file` should match every line | patterns | todo |
+| #2177 | a UTF-8 BOM at the start of `.gitignore` (and the other ignore files) is part of the first pattern | ignore | todo |
+| #2944 | `--stats` "bytes searched" can be wrong | printer | todo |
+| #2990 | globs ending in `.` are mishandled | globset | todo |
+| #3100 | `-r` drops line terminators | replace | todo, with `-r` |
+| #3108 | `-q --files-without-match` inverts the exit code | exit codes | todo |
+| #3173 | ancestor ignore filter wrong for whitelisted hidden files | ignore | todo |
+| #3178 | `--json` summary statistics wrong | printer | todo |
+| #3179 | absolute paths with a global gitignore | ignore | todo |
+| #3593 | `-v -m N -A k` prints the rest of the input as matches | searcher | todo |
+| #3581 #1764 | `-g !DIRNAME/` does not match when the working directory is `DIRNAME` | globs | todo |
+| #3605 #3604 | an ignore file stops being read at an invalid UTF-8 line | ignore | todo |
+| #3527 | a lone `!` line in a gitignore is not a no-op | ignore | todo |
+| #3477 | trailing spaces in gitignore patterns are parsed wrongly | ignore | todo |
+| #2745 | glob character classes match the path separator | globset | todo |
+| #3609 #3603 | partial path components accepted when stripping prefixes | paths | todo |
+| #2958 | control codes in paths are printed raw | printer | todo |
+| #3484 | Scheme files are part of the Lisp type | types | todo |
+| #2552 | `-L` reports broken symlinks that are ignored | walk | todo |
+| #3534 | symlink loops above the search root are not detected | walk | todo |
+| #3382 | buffered matches lost after an error in a parallel search | walk | todo |
+| #3617 | on Windows, stdout that is a pipe is compared against the searched files | walk | todo, with the stdout check |
+| #2094 #3076 | `-m` with `-U` shows too many matches | multiline | todo, with `-U` |
+| #3180 | `-U` with `-r` panics | multiline | todo, with `-U` |
+| #1983 #3364 | `--json` emits one match per multiline match block | multiline | todo, with `-U` |
+| #3503 | multi-line match discovery gives up past `MAX_LOOK_AHEAD` | multiline | todo, with `-U` |
+| #3342 | compressed files detected by extension only, not by magic number | `-z` | todo, with `-z` |
+| #3222 | decompression commands do not separate flags from paths | `-z` | todo, with `-z` |
+
 ## NVOL work this port needs
 
 - **Reverse memmem** (`memchr::memmem::FinderRev`): regex-automata's reverse-suffix and
@@ -108,3 +168,6 @@ Status: `done`, `partial` (what is missing is said), `todo`.
    on.
 4. Input (section 4) and the NVOL kernels it needs.
 5. Command line and configuration (section 5).
+
+The bugs of section 6 are fixed alongside: the ones in parts already ported first (B1-B3 and
+the upstream rows without a "with" note), each later one together with the feature it names.

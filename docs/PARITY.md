@@ -149,7 +149,7 @@ recorded here as such.
 | #2094 #3076 | `-m` with `-U` shows too many matches | multiline | fixed in the multi line search only; upstream moved `-m` to the searcher in every mode (a6e0be3), which is where #3593, R16-1 and R16-2 came from, so line mode keeps 14.1.1's |
 | #3180 | `-U` with `-r` panics | multiline | fixed (grepper's port panicked the same way) |
 | #1983 #3364 | `--json` emits one match per multiline match block | multiline | fixed |
-| #3503 | multi-line match discovery gives up past `MAX_LOOK_AHEAD` | multiline | todo |
+| #3503 | multi-line match discovery gives up past `MAX_LOOK_AHEAD` | multiline | todo, with `-P`: only a look-ahead regex (PCRE2) can match in the search and not in the printer's capped view; ripgrep's own test skips without PCRE2 |
 | #3342 | compressed files detected by extension only, not by magic number | `-z` | todo, with `-z` |
 | #3222 | decompression commands do not separate flags from paths | `-z` | todo, with `-z` |
 

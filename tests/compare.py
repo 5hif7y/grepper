@@ -648,6 +648,9 @@ def write_tree(name, files, mtimes=False):
 
 def write_fixtures():
     os.makedirs(FIX, exist_ok=True)
+    # the fixtures are a git repository of their own: rg and grepper read .gitignore files
+    # only inside one (require_git), and a copy of grepper without its .git would test none
+    os.makedirs(os.path.join(FIX, ".git"), exist_ok=True)
     for name, data in FILES.items():
         with open(os.path.join(FIX, name), "wb") as f:
             f.write(data)

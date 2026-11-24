@@ -70,6 +70,9 @@ gitignore_add_line :: proc(g: ^Gitignore, line_in: string) -> (err: Maybe(string
 			is_absolute = true
 		}
 	}
+	// a `!` or `/` with nothing after it is no pattern, and git skips the line; ripgrep
+	// 14.1.1 compiled a lone `!` to a whitelist of everything (fix: 16.0.0's #3527)
+	if len(line) == 0 { return nil }
 	if len(line) > 0 && line[len(line) - 1] == '/' {
 		glob.is_only_dir = true
 		line = line[:len(line) - 1]

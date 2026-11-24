@@ -397,6 +397,10 @@ RG_BUGS = [
     # a UTF-8 BOM opens bom/.gitignore: rg 14.1.1 reads its first pattern as BOM+before.txt
     ("ignore file with a BOM", "U2177", ["-l", "hit", "bom"], "tree5", True,
      (0, os.path.join("bom", "other.txt").encode() + b"\n")),
+    # a lone ! (and a lone /) is no pattern: rg 14.1.1 compiles ! to a whitelist of
+    # everything, which brings back x.tmp and the hidden file
+    ("ignore file with a lone !", "U3527", ["-l", "hit", "bang"], "tree5", True,
+     (0, os.path.join("bang", "y.txt").encode() + b"\n")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it
@@ -456,6 +460,12 @@ TREE5 = {
     "bom/before.txt": b"hit\n",
     "bom/after.txt": b"hit\n",
     "bom/other.txt": b"hit\n",
+    "bang/.gitignore": b"*.tmp\n!\n",
+    "bang/x.tmp": b"hit\n",
+    "bang/y.txt": b"hit\n",
+    "bang/.hidden": b"hit\n",
+    "bang/sub/.gitignore": b"!\n/\n",
+    "bang/sub/z.tmp": b"hit\n",
 }
 
 # parent-directory rules that name directories below the search root (PARITY B3)

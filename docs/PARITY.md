@@ -32,7 +32,7 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 | byte offset, column | `-b --column` | done |
 | only matching | `-o` | done |
 | vim format | `--vimgrep` | done |
-| replacement, with `$1 ${name}` captures | `-r` | todo |
+| replacement, with `$1 ${name}` captures | `-r` | done (standard printer; `--json` ignores it, as 14.1.1) |
 | count every match, files without a match, zero counts | `--count-matches --files-without-match --include-zero` | done |
 | NUL after paths, path separator | `-0 --path-separator` | done |
 | field separators | `--field-match-separator --field-context-separator` | done |
@@ -128,7 +128,7 @@ recorded here as such.
 | #2177 | a UTF-8 BOM at the start of `.gitignore` (and the other ignore files) is part of the first pattern | ignore | fixed |
 | #2944 | `--stats` "bytes searched" can be wrong | printer | fixed |
 | #2990 | globs ending in `.` are mishandled | globset | fixed |
-| #3100 | `-r` drops line terminators | replace | todo, with `-r` |
+| #3100 | `-r` drops line terminators | replace | fixed |
 | #3108 | `-q --files-without-match` inverts the exit code | exit codes | fixed |
 | #3173 | ancestor ignore filter wrong for whitelisted hidden files | ignore | fixed with B3 (the `.` root case is part of that code); on Windows 14.1.1 does not show it, since prefixes are stripped by components |
 | #3178 | `--json` summary statistics wrong | printer | fixed |

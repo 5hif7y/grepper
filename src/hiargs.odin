@@ -94,7 +94,6 @@ unsupported :: proc(low: ^Low_Args) -> string {
 	if low.engine != .Default { return "-P/--pcre2 and --engine" }
 	if low.multiline { return "-U/--multiline" }
 	if low.hyperlink_format != "" { return "--hyperlink-format" }
-	if low.replace != nil { return "-r/--replace" }
 	if low.max_columns_preview { return "--max-columns-preview" }
 	return ""
 }

@@ -23,6 +23,7 @@ Matcher :: struct {
 	cache:    Pike_Cache,
 	slots:    []int,
 	dfa:      Lazy_Dfa,
+	lit_slots: [2]int,     // group 0 of the last matcher_captures_at, for the literal kinds
 }
 
 // a worker's own copy: the memmem finders and the PikeVM's scratch change while searching
@@ -117,11 +118,20 @@ matcher_find_candidate_line :: proc(m: ^Matcher, buf: []u8) -> (at: int, confirm
 	return e, true, true
 }
 
-// the capture group i of the last Pike search (-1 when it did not take part)
+// grep-matcher's captures_at: the leftmost-first match in hay[at:] and its capture groups,
+// read back with matcher_group
+matcher_captures_at :: proc(m: ^Matcher, hay: []u8, at: int) -> bool {
+	s, e, ok := find(m, hay, at, len(hay))
+	if ok && m.kind != .Pike { m.lit_slots = {s, e} }
+	return ok
+}
+
+// the capture group i of the last matcher_captures_at (not ok when it did not take part);
+// the literal kinds have group 0 only
 matcher_group :: proc(m: ^Matcher, i: int) -> (r: Range, ok: bool) {
 	if m.kind != .Pike {
 		if i != 0 { return }
-		return {m.slots[0], m.slots[1]}, m.slots != nil
+		return {m.lit_slots[0], m.lit_slots[1]}, true
 	}
 	if 2 * i + 1 >= len(m.slots) || m.slots[2 * i] < 0 || m.slots[2 * i + 1] < 0 { return }
 	return {m.slots[2 * i], m.slots[2 * i + 1]}, true

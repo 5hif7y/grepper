@@ -94,6 +94,10 @@ def main():
             pat = gen(r)
             opts = r.choice(OPTS)
             args = opts + ([] if "-c" in opts else ["-o", "-n", "--column"]) + ["-e", pat]
+            if "-c" not in opts and r.random() < 0.3 and "--crlf" not in opts:
+                # the capture groups, through -r: each group's text as the regex crate has it
+                # (not with --crlf, where rg 14.1.1 turns a bare \n into \r\n: RG_BUGS U3100)
+                args = opts + ["-n", "-r", "<$0|$1|$2|$3>", "-e", pat]
             g = run(a.grepper, args, path)
             rg = run(a.rg, args, path)
             if rg[0] == 2:

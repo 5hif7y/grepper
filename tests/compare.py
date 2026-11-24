@@ -30,6 +30,7 @@ FILES = {
     "ws.txt": b"  \t lead alpha\n\tx alpha y alpha\nalpha\n",
     "pats.txt": b"gamma\r\nlast\n\nzzz",
     "esc.txt": b"tab\there\nquote\"d\nctl\x01x\x7f\n",
+    "mixed_eol.txt": b"hello\nworld\r\nalpha beta\r\n",
     "words.txt": "alpha alphabet alpha_x xalpha\nALPHA Alpha\nnaïve café Σοφός σοφός\nKelvin \u212a k\n".encode(),
     "nuldata.txt": b"one alpha\x00two\x00alpha three\x00four",
     # a NUL past the first 64 KiB of a file given on the command line: read through the line
@@ -229,6 +230,33 @@ CASES = [
     ("haystack anchor inverted", ["-n", "-v", "\\Aalpha", "plain.txt"]),
     ("haystack anchor inverted max count context", ["-n", "-v", "-m", "2", "-A", "1", "\\Agamma", "plain.txt"]),
     ("haystack anchor only matching", ["-o", "--column", "\\A\\w+", "words.txt"]),
+    # -r/--replace: captures by number and name, $$, unknown and malformed references,
+    # empty matches, -o, context, colours and the column of the replaced line
+    ("replace", ["-r", "X", "alpha", "plain.txt"]),
+    ("replace whole match", ["-n", "-r", "[$0]", "alpha", "plain.txt"]),
+    ("replace groups", ["-r", "${1}_$2", "(al)(pha)", "plain.txt"]),
+    ("replace named group", ["-r", "<$w>", "(?P<w>al)pha", "plain.txt"]),
+    ("replace dollars", ["-r", "$$-$x-$", "alpha", "plain.txt"]),
+    ("replace odd references", ["-r", "${1a}$1a$01$9${}${1", "(a)", "plain.txt"]),
+    ("replace group not taking part", ["-o", "-r", "<$1>", "a(l)?p", "plain.txt"]),
+    ("replace empty", ["-r", "", "alpha", "plain.txt"]),
+    ("replace empty matches", ["-r", "Z", "x*", "words.txt"]),
+    ("replace empty matches only", ["-o", "-r", "Z", "x*", "words.txt"]),
+    ("replace unicode", ["-r", "<$0>", "-i", "σοφός|café", "words.txt"]),
+    ("replace column", ["-n", "--column", "-r", "ZZZZ", "a", "plain.txt"]),
+    ("replace vimgrep", ["--vimgrep", "-r", "Z", "al", "plain.txt"]),
+    ("replace invert context", ["-v", "-r", "Z", "-C1", "gamma", "plain.txt"]),
+    ("replace context", ["-C1", "-r", "Z", "gamma", "plain.txt"]),
+    ("replace literals", ["-r", "Z", "-F", "-e", "alpha", "-e", "beta", "plain.txt"]),
+    ("replace literal", ["-r", "[$0|$1]", "-F", "alpha", "plain.txt"]),
+    ("replace colour", ["--color", "always", "-r", "Z$0", "alpha", "plain.txt"]),
+    ("replace max count", ["-m", "1", "-r", "Z", "alpha", "plain.txt"]),
+    ("replace passthru", ["--passthru", "-r", "Z", "beta", "plain.txt"]),
+    ("replace max columns", ["-M", "8", "-r", "ZZZZZZZZZZ", "alpha", "plain.txt"]),
+    ("replace crlf", ["--crlf", "-r", "<$0>", "a.", "crlf.txt"]),
+    ("replace word", ["-w", "-r", "Z", "alpha", "words.txt"]),
+    ("replace count ignores it", ["-c", "-r", "Z", "alpha", "plain.txt"]),
+    ("replace json ignores it", ["--json", "-r", "Z", "beta", "plain.txt"]),
     ("anchored class", ["-c", "^\\s*$", "plain.txt", "only_newlines.txt"]),
     # JSON Lines and statistics (timings normalized)
     ("json", ["--json", "alpha", "plain.txt", "crlf.txt"]),
@@ -451,6 +479,10 @@ RG_BUGS = [
      (0, os.path.join("types", "c.el").encode() + b"\n")),
     ("type scheme", "U3484", ["--files", "-t", "scheme", "types"], "tree5", True,
      (0, b"".join(os.path.join("types", f).encode() + b"\n" for f in ["a.scm", "b.ss"]))),
+    # -r keeps each line's own terminator: with --crlf, rg 14.1.1 ends the replaced "hello\n"
+    # with \r\n; the answer is the input itself, as $0 for a whole line changes nothing
+    ("replace keeps the line terminator", "U3100", ["--crlf", "-r", "$0", ".+", "mixed_eol.txt"], "", False,
+     (0, b"hello\nworld\r\nalpha beta\r\n")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

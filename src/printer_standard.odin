@@ -32,9 +32,10 @@ Standard_Config :: struct {
 }
 
 Standard_Printer :: struct {
-	config:  Standard_Config,
-	out:     Out,
-	matches: [dynamic]Range,
+	config:   Standard_Config,
+	out:      Out,
+	matches:  [dynamic]Range,
+	replacer: Replacer,
 }
 
 Standard_Sink :: struct {
@@ -103,6 +104,14 @@ find_iter_at :: proc(m: ^Matcher, hay: []u8, at, limit: int, out: ^[dynamic]Rang
 	}
 }
 
+// StandardSink::replace: the replacement of bytes[r] when -r is given
+standard_replace :: proc(s: ^Standard_Sink, searcher: ^Searcher, bytes: []u8, r: Range) {
+	replacer_clear(&s.p.replacer)
+	rep, ok := s.p.config.replacement.?
+	if !ok { return }
+	replacer_replace_all(&s.p.replacer, searcher, s.m, bytes, r, rep)
+}
+
 standard_should_quit :: proc(s: ^Standard_Sink) -> bool {
 	limit, ok := s.p.config.max_matches.?
 	if !ok || s.match_count < limit { return false }
@@ -122,6 +131,7 @@ standard_matched :: proc(s: ^Standard_Sink, searcher: ^Searcher, mat: ^Sink_Matc
 		s.after_context_remaining = u64(searcher.after_context)
 	}
 	record_matches(s, searcher, mat.buffer, mat.range_in_buffer)
+	standard_replace(s, searcher, mat.buffer, mat.range_in_buffer)
 	if s.p.config.stats {
 		s.stats.matches += u64(len(s.p.matches))
 		s.stats.matched_lines += u64(count_lines_of(mat.bytes, searcher.line_term))
@@ -136,6 +146,7 @@ standard_matched :: proc(s: ^Standard_Sink, searcher: ^Searcher, mat: ^Sink_Matc
 		line_number = mat.line_number,
 		matches = s.p.matches[:],
 	}
+	if dst, ms, ok := replacer_result(&s.p.replacer); ok { impl.bytes, impl.matches = dst, ms }
 	std_sink(&impl)
 	return !standard_should_quit(s)
 }
@@ -150,11 +161,13 @@ count_lines_of :: proc(bytes: []u8, term: u8) -> int {
 
 standard_context :: proc(s: ^Standard_Sink, searcher: ^Searcher, ctx: ^Sink_Context) -> bool {
 	clear(&s.p.matches)
+	replacer_clear(&s.p.replacer)
 	if ctx.kind == .After && s.after_context_remaining > 0 {
 		s.after_context_remaining -= 1
 	}
 	if searcher.invert_match {
 		record_matches(s, searcher, ctx.bytes, {0, len(ctx.bytes)})
+		standard_replace(s, searcher, ctx.bytes, {0, len(ctx.bytes)})
 	}
 	if searcher.binary.kind == .Convert && s.binary_byte_offset != nil {
 		return false
@@ -167,6 +180,7 @@ standard_context :: proc(s: ^Standard_Sink, searcher: ^Searcher, ctx: ^Sink_Cont
 		is_context = true,
 		matches = s.p.matches[:],
 	}
+	if dst, ms, ok := replacer_result(&s.p.replacer); ok { impl.bytes, impl.matches = dst, ms }
 	std_sink(&impl)
 	return !standard_should_quit(s)
 }

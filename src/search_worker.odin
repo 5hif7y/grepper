@@ -19,6 +19,7 @@ Worker :: struct {
 	h:        ^Hi_Args,
 	m:        Matcher,
 	searcher: Searcher,
+	read_buf: [dynamic]u8,     // the line buffer of read searches, kept across files
 	kind:     Printer_Kind,
 	std:      Standard_Printer,
 	sum:      Summary_Printer,
@@ -150,18 +151,10 @@ worker_search :: proc(w: ^Worker, hay: Haystack) -> (has_match: bool, err: Maybe
 		json_sink = json_sink_with_path(&w.json, &w.m, hay.path)
 		sink = &json_sink
 	}
-	if multi_line_with_matcher(&w.searcher, &w.m) {
-		// the whole haystack in memory: read to the end, or the file's bytes
-		data: []u8
-		if hay.is_stdin {
-			all, e := read_all_stdin()
-			if e != nil { return false, os_error_message(e) }
-			data = all
-		} else {
-			d, e := os.read_entire_file(hay.path, context.allocator)
-			if e != nil { return false, os_error_message(e) }
-			data = d
-		}
+	if hay.is_stdin && multi_line_with_matcher(&w.searcher, &w.m) {
+		// the whole haystack in memory, as ripgrep reads it for multi line mode
+		data, e := read_all_stdin()
+		if e != nil { return false, os_error_message(e) }
 		defer delete(data)
 		multi_line_search(&w.searcher, &w.m, data, &sink)
 	} else if hay.is_stdin {
@@ -172,14 +165,37 @@ worker_search :: proc(w: ^Worker, hay: Haystack) -> (has_match: bool, err: Maybe
 			return false, os_error_message(e)
 		}
 	} else {
-		data, e := os.read_entire_file(hay.path, context.allocator)
+		// search_file_maybe_path: a memory map when ripgrep would map (and the file maps);
+		// otherwise reads, 64 KiB at a time, or the whole file for multi line mode
+		f, e := os.open(hay.path)
 		if e != nil { return false, os_error_message(e) }
-		defer delete(data)
+		defer os.close(f)
+		mapped := false
 		if w.searcher.mmap {
-			slice_by_line(&w.searcher, &w.m, data, &sink)
-		} else {
-			lb := Line_Buffer{mem = data, cap = DEFAULT_BUFFER_CAPACITY, binary = w.searcher.binary, lineterm = w.searcher.line_term}
-			read_by_line(&w.searcher, &w.m, &lb, &sink)
+			if mp, ok := map_file(f); ok {
+				mapped = true
+				defer unmap_file(&mp)
+				if multi_line_with_matcher(&w.searcher, &w.m) {
+					multi_line_search(&w.searcher, &w.m, mp.data, &sink)
+				} else {
+					slice_by_line(&w.searcher, &w.m, mp.data, &sink)
+				}
+			}
+		}
+		if !mapped {
+			if multi_line_with_matcher(&w.searcher, &w.m) {
+				data, re := os.read_entire_file(f, context.allocator)
+				if re != nil { return false, os_error_message(re) }
+				defer delete(data)
+				multi_line_search(&w.searcher, &w.m, data, &sink)
+			} else {
+				lb := Line_Buffer{handle = f, binary = w.searcher.binary, lineterm = w.searcher.line_term}
+				lb.buf = w.read_buf
+				resize(&lb.buf, DEFAULT_BUFFER_CAPACITY)
+				re := read_by_line(&w.searcher, &w.m, &lb, &sink)
+				w.read_buf = lb.buf
+				if re != nil { return false, os_error_message(re) }
+			}
 		}
 	}
 	switch w.kind {

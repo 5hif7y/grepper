@@ -31,7 +31,33 @@ The same results as ripgrep, and equal or better speed, measured, not assumed:
 | Port | globset, ignore, searcher, printer, cli: the remaining crates, 1:1 | later |
 
 `tests/compare.py` runs grepper and ripgrep on the same arguments and compares their output
-and exit code byte for byte. Today all 66 cases match ripgrep 14.1.1.
+and exit code byte for byte. Today all 69 cases match ripgrep 14.1.1.
+
+### Speed
+
+`tests/bench.py` reports wall time, best of 3, for both tools with their default threads. It
+first checks that their sorted outputs are identical. The corpus is a tree of 30,415 files on
+an i5-7400 under Windows 10:
+
+| search | lines | grepper | ripgrep | ratio |
+|---|---:|---:|---:|---:|
+| literal, common | 224507 | 1.51 s | 3.26 s | 0.46 |
+| literal, rare | 1 | 1.56 s | 3.03 s | 0.51 |
+| literal, `-c` | 2871 | 1.57 s | 2.81 s | 0.56 |
+| literal, `-l` | 414 | 1.49 s | 2.70 s | 0.55 |
+| regex with a literal | 38003 | 1.49 s | 3.12 s | 0.48 |
+| regex, no literal | 8670 | 1.33 s | 2.72 s | 0.49 |
+| regex, anchored | 9549 | 1.38 s | 2.78 s | 0.50 |
+| `-i` (ASCII) | 2329 | 2.42 s | 2.92 s | 0.83 |
+
+**Caveats:**
+- This is a single machine and a single OS, and Linux has not been measured yet.
+- grepper does less than ripgrep: no Unicode case folding, and no stdin detection.
+- The 8-literal search is left out: ripgrep printed 0 or 8 lines of a file with a late NUL
+  across identical runs.
+
+See [docs/odin-findings.md](docs/odin-findings.md) for the Odin behaviours grepper works
+around.
 
 ### Supported today
 

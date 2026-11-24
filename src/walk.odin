@@ -7,84 +7,103 @@ import "core:strings"
 import "core:sync"
 import "core:sync/chan"
 import "core:thread"
+import "core:time"
 
-// One thread walks the directories (gitignore rules, hidden entries, symlinks not followed,
-// as ripgrep's defaults) and sends the files to a channel; N workers search them, each into
-// its own buffer, written whole under a lock so files never interleave.
-Job :: struct {
-	path:     string,      // as printed
-	explicit: bool,        // given on the command line (searched even if hidden or ignored)
-}
+// The walk and the searches over it (ripgrep's main.rs search / search_parallel / files /
+// files_parallel): one thread walks the directories (gitignore rules, hidden entries,
+// symlinks not followed) and sends haystacks to a channel; N workers search them, each into
+// its own buffer, written whole under a lock, as ripgrep's BufferWriter (which also writes
+// the file separator between non-empty buffers when there are several threads).
 
 Shared :: struct {
-	o:        ^Options,
-	m:        ^Matcher,
-	proto:    Printer,     // the settings every worker's printer copies
-	mode:     Mode,
-	jobs:     chan.Chan(Job),
-	out_lock: sync.Mutex,
-	files_out: int,        // blocks written, for the blank line between files in heading mode
-	found:    bool,
-	failed:   bool,
+	h:         ^Hi_Args,
+	m:         ^Matcher,
+	jobs:      chan.Chan(Haystack),
+	out_lock:  sync.Mutex,
+	printed:   bool,        // the buffer writer's: something was written
+	matched:   bool,
+	searched:  bool,
+	quit:      bool,        // -q: a match ends the search
+	stats:     Stats,
 }
 
-worker :: proc(sh: ^Shared) {
-	m := matcher_clone(sh.m^)
-	p := sh.proto
-	p.buf = make([dynamic]u8, 0, 1 << 16)
-	p.no_flush = true
+// rg: prefixed messages, which also make the exit code 2
+messages_errored: bool
+
+err_message :: proc(sh: ^Shared, parts: ..string) {
+	sync.lock(&sh.out_lock)
+	defer sync.unlock(&sh.out_lock)
+	messages_errored = true
+	if sh.h.no_messages { return }
+	b: strings.Builder
+	strings.write_string(&b, "grepper: ")
+	for p in parts { strings.write_string(&b, p) }
+	strings.write_byte(&b, '\n')
+	os.write(os.stderr, b.buf[:])
+	strings.builder_destroy(&b)
+}
+
+write_stdout :: proc(b: []u8) {
+	if len(b) > 0 { os.write(os.stdout, b) }
+}
+
+search_worker_thread :: proc(sh: ^Shared) {
+	w := worker_new(sh.h, sh.m)
+	out := worker_out(&w)
+	reserve(&out.buf, 1 << 16)
 	for {
-		job, ok := chan.recv(sh.jobs)
+		hay, ok := chan.recv(sh.jobs)
 		if !ok { break }
-		if sh.o.files {
-			put(&p, job.path)
-			put(&p, "\n")
-			if len(p.buf) >= FLUSH_AT {
-				sync.lock(&sh.out_lock)
-				os.write(os.stdout, p.buf[:])
-				sync.unlock(&sh.out_lock)
-				clear(&p.buf)
-			}
-			continue
+		if sync.atomic_load(&sh.quit) { continue }
+		sync.atomic_store(&sh.searched, true)
+		out_clear(out)
+		has_match, err := worker_search(&w, hay)
+		if msg, bad := err.?; bad {
+			err_message(sh, hay.path, ": ", msg)
 		}
-		data, err := os.read_entire_file(job.path, context.allocator)
-		if err != nil {
-			sync.lock(&sh.out_lock)
-			eprint_error(job.path, err)
-			sh.failed = true
-			sync.unlock(&sh.out_lock)
-			continue
-		}
-		n := 0
-		if nul, binary := first_nul(data); !binary {
-			n = search_buffer(&m, data, job.path, &p, sh.mode)
-		} else if job.explicit {
-			n = search_explicit_binary(&m, data, nul, job.path, &p, sh.mode)
-		} else {
-			n = search_walked_binary(&m, data, job.path, &p, sh.mode)
-		}
-		delete(data)
-		free_all(context.temp_allocator)    // the regex VM's per-match allocations
-		if n > 0 || len(p.buf) > 0 {
-			sync.lock(&sh.out_lock)
-			if n > 0 { sh.found = true }
-			if len(p.buf) > 0 {
-				if p.heading && p.with_filename && sh.mode == .Lines && sh.files_out > 0 {
-					os.write(os.stdout, transmute([]u8)string("\n"))
-				}
-				os.write(os.stdout, p.buf[:])
-				sh.files_out += 1
-			}
-			sync.unlock(&sh.out_lock)
-			clear(&p.buf)
-		}
-	}
-	if len(p.buf) > 0 {        // --files: what is left
+		free_all(context.temp_allocator)
 		sync.lock(&sh.out_lock)
-		os.write(os.stdout, p.buf[:])
+		if has_match { sh.matched = true }
+		if len(out.buf) > 0 {
+			if sep, has := sh.h.file_separator.?; has && sh.h.threads > 1 && sh.printed {
+				write_stdout(transmute([]u8)sep)
+				write_stdout([]u8{'\n'})
+			}
+			write_stdout(out.buf[:])
+			sh.printed = true
+		}
+		if sh.matched && sh.h.quit_after_match { sync.atomic_store(&sh.quit, true) }
+		stats_add(&sh.stats, w.stats)
+		w.stats = {}
 		sync.unlock(&sh.out_lock)
 	}
-	delete(p.buf)
+}
+
+files_worker_thread :: proc(sh: ^Shared) {
+	o: Out
+	o.color = sh.h.color
+	term := sh.h.path_terminator.? or_else '\n'
+	for {
+		hay, ok := chan.recv(sh.jobs)
+		if !ok { break }
+		sync.lock(&sh.out_lock)
+		sh.matched = true
+		quit := sh.h.quit_after_match
+		sync.unlock(&sh.out_lock)
+		if quit { sync.atomic_store(&sh.quit, true); continue }
+		out_spec(&o, sh.h.colors.path, printer_path(hay.path, sh.h.path_separator))
+		out_write(&o, []u8{term})
+		free_all(context.temp_allocator)
+		if len(o.buf) >= 1 << 16 {
+			sync.lock(&sh.out_lock)
+			write_stdout(o.buf[:])
+			sync.unlock(&sh.out_lock)
+			clear(&o.buf)
+		}
+	}
+	sync.lock(&sh.out_lock)
+	write_stdout(o.buf[:])
+	sync.unlock(&sh.out_lock)
 }
 
 // the path to print for an entry under a walked directory
@@ -112,14 +131,18 @@ inside_git :: proc(dir: string) -> bool {
 	}
 }
 
+// the haystack's printed path: "./" dropped from walked paths under the implicit root
+haystack_path :: proc(sh: ^Shared, path: string) -> string {
+	if sh.h.has_implicit_path && strings.has_prefix(path, "./") { return path[2:] }
+	return path
+}
+
 walk_dir :: proc(sh: ^Shared, shown, rel: string, stack: ^[dynamic]^Rules, in_git: bool) {
+	if sync.atomic_load(&sh.quit) { return }
 	fs_dir := shown if shown != "" else "."
 	entries, ok := list_dir(fs_dir)
 	if !ok {
-		sync.lock(&sh.out_lock)
-		eprint_error(fs_dir, os.General_Error.Not_Exist)
-		sh.failed = true
-		sync.unlock(&sh.out_lock)
+		err_message(sh, haystack_path(sh, fs_dir), ": ", os_error_message(os.General_Error.Not_Exist))
 		return
 	}
 	defer {
@@ -137,10 +160,14 @@ walk_dir :: proc(sh: ^Shared, shown, rel: string, stack: ^[dynamic]^Rules, in_gi
 		}
 	}
 	in_git := in_git || .Git in present
-	added := 0
-	if !sh.o.no_ignore {
-		added = load_dir_rules(fs_dir, rel, in_git, present, stack)
+	h := sh.h
+	use: Ignore_Files
+	if !h.no_ignore_vcs && (in_git || h.no_require_git) {
+		use += {.Gitignore}
+		if !h.no_ignore_exclude { use += {.Git} }
 	}
+	if !h.no_ignore_dot { use += {.Ignore, .Rgignore} }
+	added := load_dir_rules(fs_dir, rel, use & present, stack)
 	defer resize(stack, len(stack) - added)
 	slice.sort_by(entries[:], proc(a, b: Dir_Entry) -> bool { return a.name < b.name })
 	for e in entries {
@@ -151,45 +178,53 @@ walk_dir :: proc(sh: ^Shared, shown, rel: string, stack: ^[dynamic]^Rules, in_gi
 		// ignore rules first; hidden entries are skipped only when no rule decides (a
 		// whitelist such as ripgrep's own `!/.github/` keeps one), as ripgrep's
 		// matched_dir_entry
-		verdict := Verdict.None
-		if !sh.o.no_ignore { verdict = stack_verdict(stack[:], child_rel, e.name, is_dir) }
+		verdict := stack_verdict(stack[:], child_rel, e.name, is_dir)
 		if verdict == .Ignore { continue }
-		if verdict == .None && e.name[0] == '.' && !sh.o.hidden { continue }
+		if verdict == .None && e.name[0] == '.' && !h.hidden { continue }
 		child_shown := join(shown, e.name)
 		if is_dir {
 			walk_dir(sh, child_shown, strings.clone(child_rel), stack, in_git)
 			delete(child_shown)
 		} else {
-			chan.send(sh.jobs, Job{child_shown, false})
+			chan.send(sh.jobs, Haystack{path = haystack_path(sh, child_shown)})
 		}
 	}
 }
 
-// search every path: files directly, directories walked; returns the exit code
-search_paths :: proc(o: ^Options, m: ^Matcher, proto: Printer, mode: Mode, paths: []string) -> int {
-	sh := Shared{o = o, m = m, proto = proto, mode = mode}
-	ch, _ := chan.create_buffered(chan.Chan(Job), 1024, context.allocator)
+// search (or list, with --files) every path: files directly, directories walked; returns
+// whether anything matched
+run_walk :: proc(h: ^Hi_Args, m: ^Matcher, files_mode: bool) -> bool {
+	started := time.tick_now()
+	sh := Shared{h = h, m = m}
+	ch, _ := chan.create_buffered(chan.Chan(Haystack), 1024, context.allocator)
 	sh.jobs = ch
-	n := o.threads if o.threads > 0 else max(1, min(os.get_processor_core_count(), 12))
+	n := h.threads
+	if files_mode { n = 1 }
 	workers := make([]^thread.Thread, n)
 	for i in 0 ..< n {
 		// each worker with its own context: its own temporary allocator
-		workers[i] = thread.create_and_start_with_poly_data(&sh, worker)
+		if files_mode {
+			workers[i] = thread.create_and_start_with_poly_data(&sh, files_worker_thread)
+		} else {
+			workers[i] = thread.create_and_start_with_poly_data(&sh, search_worker_thread)
+		}
 	}
-	for path in paths {
-		fi, err := os.stat(path if path != "" else ".", context.allocator)
+	for path in h.paths {
+		if sync.atomic_load(&sh.quit) { break }
+		if path == "-" {
+			chan.send(sh.jobs, Haystack{path = "<stdin>", explicit = true, is_stdin = true})
+			continue
+		}
+		fi, err := os.stat(path, context.allocator)
 		if err != nil {
-			sync.lock(&sh.out_lock)
-			eprint_error(path, err)
-			sh.failed = true
-			sync.unlock(&sh.out_lock)
+			err_message(&sh, path, ": ", os_error_message(err))
 			continue
 		}
 		if fi.type == .Directory {
 			stack: [dynamic]^Rules
-			walk_dir(&sh, path, "", &stack, inside_git(path if path != "" else "."))
+			walk_dir(&sh, path, "", &stack, inside_git(path))
 		} else {
-			chan.send(sh.jobs, Job{path, true})
+			chan.send(sh.jobs, Haystack{path = path, explicit = true})
 		}
 		os.file_info_delete(fi, context.allocator)
 	}
@@ -198,5 +233,65 @@ search_paths :: proc(o: ^Options, m: ^Matcher, proto: Printer, mode: Mode, paths
 		thread.join(t)
 		thread.destroy(t)
 	}
-	return 2 if sh.failed else (0 if sh.found else 1)
+	if h.has_implicit_path && !sh.searched && !files_mode {
+		err_message(&sh, "No files were searched, which means ripgrep probably applied a filter you didn't expect.\nRunning with --debug will show why files are being skipped.")
+	}
+	if h.stats && !files_mode {
+		o: Out
+		print_stats(&o, h.mode.search, sh.stats, time.tick_since(started))
+		// with several threads the buffer writer adds the file separator before it
+		if sep, has := h.file_separator.?; has && h.threads > 1 && sh.printed && len(o.buf) > 0 {
+			write_stdout(transmute([]u8)sep)
+			write_stdout([]u8{'\n'})
+		}
+		write_stdout(o.buf[:])
+	}
+	return sh.matched
+}
+
+// main.rs's print_stats: a JSON summary message, or the text block
+print_stats :: proc(o: ^Out, mode: Search_Mode, st: Stats, elapsed: time.Duration) {
+	if mode == .JSON {
+		out_str(o, `{"data":{"elapsed_total":{"human":"`)
+		write_seconds(o, i64(elapsed))
+		out_str(o, `s","nanos":`)
+		out_decimal(o, u64(i64(elapsed) % 1_000_000_000))
+		out_str(o, `,"secs":`)
+		out_decimal(o, u64(i64(elapsed) / 1_000_000_000))
+		out_str(o, `},"stats":{"bytes_printed":`)
+		out_decimal(o, st.bytes_printed)
+		out_str(o, `,"bytes_searched":`)
+		out_decimal(o, st.bytes_searched)
+		out_str(o, `,"elapsed":{"human":"`)
+		write_seconds(o, st.elapsed_ns)
+		out_str(o, `s","nanos":`)
+		out_decimal(o, u64(st.elapsed_ns % 1_000_000_000))
+		out_str(o, `,"secs":`)
+		out_decimal(o, u64(st.elapsed_ns / 1_000_000_000))
+		out_str(o, `},"matched_lines":`)
+		out_decimal(o, st.matched_lines)
+		out_str(o, `,"matches":`)
+		out_decimal(o, st.matches)
+		out_str(o, `,"searches":`)
+		out_decimal(o, st.searches)
+		out_str(o, `,"searches_with_match":`)
+		out_decimal(o, st.searches_with_match)
+		out_str(o, "}},\"type\":\"summary\"}\n")
+		return
+	}
+	line :: proc(o: ^Out, n: u64, what: string) {
+		out_decimal(o, n)
+		out_str(o, what)
+	}
+	out_str(o, "\n")
+	line(o, st.matches, " matches\n")
+	line(o, st.matched_lines, " matched lines\n")
+	line(o, st.searches_with_match, " files contained matches\n")
+	line(o, st.searches, " files searched\n")
+	line(o, st.bytes_printed, " bytes printed\n")
+	line(o, st.bytes_searched, " bytes searched\n")
+	write_seconds(o, st.elapsed_ns)
+	out_str(o, " seconds spent searching\n")
+	write_seconds(o, i64(elapsed))
+	out_str(o, " seconds\n")
 }

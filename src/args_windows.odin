@@ -30,4 +30,12 @@ program_args :: proc() -> []string {
 SEP :: "\\"
 
 // ripgrep's default path colour on Windows (crates/printer/src/color.rs)
-COLOR_PATH :: "\x1b[0m\x1b[36m"
+COLOR_PATH_DEFAULT :: Color_Kind.Cyan
+
+// grep-cli's is_readable_stdin on Windows: not a console, and a disk file or a pipe
+is_readable_stdin :: proc() -> bool {
+	h := win32.GetStdHandle(win32.STD_INPUT_HANDLE)
+	if h == nil || h == win32.INVALID_HANDLE_VALUE { return false }
+	t := win32.GetFileType(h)
+	return t == win32.FILE_TYPE_DISK || t == win32.FILE_TYPE_PIPE
+}

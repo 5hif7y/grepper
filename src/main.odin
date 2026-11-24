@@ -5,95 +5,123 @@ package grepper
 
 import "core:fmt"
 import "core:os"
+import "core:strings"
 
 VERSION :: "0.0.1"
 
 USAGE :: `grepper ` + VERSION + `
-A recursive line-oriented search tool (a port of ripgrep to Odin).
+A recursive line-oriented search tool: a port of ripgrep 14.1.1 to Odin, with NVOL's SIMD.
 
 USAGE:
     grepper [OPTIONS] PATTERN [PATH ...]
     grepper [OPTIONS] -e PATTERN ... [PATH ...]
+    grepper [OPTIONS] --files [PATH ...]
 
-OPTIONS (ripgrep's, a subset):
-    -F, --fixed-strings     PATTERN is a literal string
-    -i, --ignore-case       case-insensitive search
-    -e, --regexp PATTERN    a pattern (repeatable)
-    -n, --line-number       show line numbers (default on a terminal)
-    -N, --no-line-number
-    -H, --with-filename     show the path of each match
-    -I, --no-filename
-        --heading           group matches under each path (default on a terminal)
-        --no-heading
-    -l, --files-with-matches
-    -c, --count             matching lines per file
-        --color WHEN        auto, always, never
-        --hidden            search hidden files and directories
-        --no-ignore         do not honour .gitignore and .ignore files
-    -j, --threads N
-    -V, --version
+Flags are ripgrep's, with ripgrep's meaning. A flag grepper does not implement yet is an
+error, never ignored; docs/PARITY.md lists what is done.
 `
 
 main :: proc() {
 	os.exit(run(program_args()[1:]))
 }
 
+eprint_error :: proc(msg: string) {
+	fmt.eprintfln("grepper: %s", msg)
+}
+
+// ripgrep's config file: RIPGREP_CONFIG_PATH, one argument per line, blank lines and lines
+// starting with `#` skipped, each line trimmed
+config_args :: proc() -> (args: [dynamic]string) {
+	path := os.get_env("RIPGREP_CONFIG_PATH", context.allocator)
+	if path == "" { return }
+	data, err := os.read_entire_file(path, context.allocator)
+	if err != nil {
+		eprint_error(strings.concatenate({"failed to read the file specified in RIPGREP_CONFIG_PATH: ", path, ": ", os_error_message(err)}))
+		return
+	}
+	rest := string(data)
+	for len(rest) > 0 {
+		line := rest
+		if i := strings.index_byte(rest, '\n'); i >= 0 {
+			line, rest = rest[:i], rest[i + 1:]
+		} else {
+			rest = ""
+		}
+		line = strings.trim_space(line)
+		if len(line) == 0 || line[0] == '#' { continue }
+		append(&args, line)
+	}
+	return
+}
+
 // exit codes as ripgrep: 0 a match, 1 none, 2 an error
 run :: proc(args: []string) -> int {
-	if len(args) == 1 && (args[0] == "--version" || args[0] == "-V") {
-		fmt.println("grepper", VERSION)
-		return 0
-	}
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.print(USAGE)
-		return 0
-	}
-	o, perr := parse_args(args)
-	if e, bad := perr.?; bad {
-		fmt.eprintfln("grepper: %s", e.msg)
-		fmt.eprint(USAGE)
+	low := low_args_default()
+	if e := parse_low(args, &low); e != "" {
+		eprint_error(e)
 		return 2
 	}
-	// literals go to NVOL directly: -F, or patterns without a regex metacharacter (as ripgrep
-	// extracts them); the rest to the regex engine
-	plain := !o.ignore_case
-	if plain && !o.fixed {
-		for p in o.patterns {
+	switch low.special {
+	case .None:
+	case .Help_Short, .Help_Long:
+		fmt.print(USAGE)
+		return 0
+	case .Version_Short, .Version_Long:
+		fmt.println("grepper", VERSION)
+		return 0
+	case .Version_PCRE2:
+		fmt.println("PCRE2 is not available in this build of grepper.")
+		return 1
+	}
+	if !low.no_config {
+		if extra := config_args(); len(extra) > 0 {
+			all: [dynamic]string
+			append(&all, ..extra[:])
+			append(&all, ..args)
+			low = low_args_default()
+			if e := parse_low(all[:], &low); e != "" {
+				eprint_error(e)
+				return 2
+			}
+		}
+	}
+	h, herr := hi_from_low(&low)
+	if herr != "" {
+		eprint_error(herr)
+		return 2
+	}
+	matched := false
+	switch h.mode.kind {
+	case .Search:
+		if !matches_possible(&h) { break }
+		m, merr := build_matcher(&h)
+		if msg, bad := merr.?; bad {
+			eprint_error(msg)
+			return 2
+		}
+		matched = run_walk(&h, &m, false)
+	case .Files:
+		matched = run_walk(&h, nil, true)
+	case .Types, .Generate:
+		unreachable()     // refused in hi_from_low
+	}
+	if matched && (h.quiet || !messages_errored) { return 0 }
+	if messages_errored { return 2 }
+	return 1
+}
+
+// literals go to NVOL directly: -F, or patterns without a regex metacharacter (as ripgrep
+// extracts them); the rest to the interim regex engine
+build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
+	ignore_case := h.case_mode == .Insensitive
+	plain := !ignore_case
+	if plain && !h.fixed_strings {
+		for p in h.patterns {
 			if has_meta(p) { plain = false }
 		}
 	}
-	m: Matcher
-	if o.files {
-		// nothing to match: the walk alone
-	} else if plain {
-		m = matcher_literals(o.patterns[:])
-	} else {
-		rerr: Maybe(string)
-		m, rerr = matcher_regex(join_patterns(o.patterns[:], o.fixed), o.ignore_case)
-		if msg, bad := rerr.?; bad {
-			fmt.eprintfln("grepper: %s", msg)
-			return 2
-		}
+	if plain {
+		return matcher_literals(h.patterns[:]), nil
 	}
-	// no path: the current directory, its entries printed without a "./" prefix (as ripgrep)
-	paths := o.paths[:] if len(o.paths) > 0 else []string{""}
-	several := len(paths) > 1
-	for path in paths {
-		if fi, err := os.stat(path if path != "" else ".", context.temp_allocator); err == nil && fi.type == .Directory {
-			several = true
-		}
-	}
-	tty := is_terminal()
-	p := Printer{
-		color = o.color == .Always || (o.color == .Auto && tty),
-		line_number = o.line_number.? or_else tty,
-		with_filename = o.with_filename.? or_else several,
-		heading = o.heading.? or_else tty,
-	}
-	mode := Mode.Files if o.files_with_matches else (Mode.Count if o.count else Mode.Lines)
-	return search_paths(&o, &m, p, mode, paths)
-}
-
-eprint_error :: proc(path: string, err: os.Error) {
-	fmt.eprintfln("grepper: %s: %v", path if path != "" else ".", err)
+	return matcher_regex(join_patterns(h.patterns[:], h.fixed_strings), ignore_case)
 }

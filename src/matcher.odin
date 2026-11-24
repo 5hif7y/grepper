@@ -54,6 +54,23 @@ matcher_literals :: proc(needles: []string) -> (m: Matcher) {
 	return
 }
 
+// grep-matcher's Matcher, as the searcher and printers call it. The interim engines never
+// match across a line terminator, so a candidate line is always confirmed.
+matcher_find_at :: proc(m: ^Matcher, hay: []u8, at: int) -> (r: Range, ok: bool) {
+	s, e := find(m, hay, at, len(hay)) or_return
+	return {s, e}, true
+}
+
+matcher_is_match :: proc(m: ^Matcher, line: []u8) -> bool {
+	_, _, ok := find(m, line, 0, len(line))
+	return ok
+}
+
+matcher_find_candidate_line :: proc(m: ^Matcher, buf: []u8) -> (at: int, confirmed: bool, ok: bool) {
+	s, _ := find(m, buf, 0, len(buf)) or_return
+	return s, true, true
+}
+
 // The leftmost match in hay[start:end): its bounds in hay. Among needles starting at the same
 // byte, the first given (leftmost-first, as ripgrep).
 find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {

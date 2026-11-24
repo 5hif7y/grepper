@@ -16,31 +16,31 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 | line numbers, headings, filenames, colours | `-n -N -H -I --heading --no-heading --color` | done |
 | count, files with matches | `-c -l` | done |
 | binary files: quit when walked, note when explicit | | done |
-| context lines and separators | `-A -B -C --context-separator --no-context-separator` | todo |
-| invert match | `-v` | todo |
-| max count | `-m` | todo |
-| print every line | `--passthru` | todo |
-| quiet | `-q` | todo |
-| byte offset, column | `-b --column` | todo |
-| only matching | `-o` | todo |
-| vim format | `--vimgrep` | todo |
+| context lines and separators | `-A -B -C --context-separator --no-context-separator` | done |
+| invert match | `-v` | done |
+| max count | `-m` | done |
+| print every line | `--passthru` | done |
+| quiet | `-q` | done |
+| byte offset, column | `-b --column` | done |
+| only matching | `-o` | done |
+| vim format | `--vimgrep` | done |
 | replacement, with `$1 ${name}` captures | `-r` | todo |
-| count every match, files without a match, zero counts | `--count-matches --files-without-match --include-zero` | todo |
-| NUL after paths, path separator | `-0 --path-separator` | todo |
-| field separators | `--field-match-separator --field-context-separator` | todo |
-| long lines | `-M --max-columns-preview` | todo |
-| trim leading whitespace | `--trim` | todo |
-| colour specs | `--colors` | todo |
-| pretty | `-p` | todo |
-| buffering | `--line-buffered --block-buffered` | todo |
-| statistics | `--stats` | todo |
-| JSON Lines output (base64 for invalid UTF-8) | `--json` | todo |
+| count every match, files without a match, zero counts | `--count-matches --files-without-match --include-zero` | done |
+| NUL after paths, path separator | `-0 --path-separator` | done |
+| field separators | `--field-match-separator --field-context-separator` | done |
+| long lines | `-M --max-columns-preview` | partial: `--max-columns-preview` needs grapheme clusters |
+| trim leading whitespace | `--trim` | done |
+| colour specs | `--colors` | done |
+| pretty | `-p` | done |
+| buffering | `--line-buffered --block-buffered` | done: accepted; grepper writes each file's output whole |
+| statistics | `--stats` | done |
+| JSON Lines output (base64 for invalid UTF-8) | `--json` | done |
 | hyperlinks | `--hyperlink-format --hostname-bin` | todo |
-| stdin when no path and stdin is not a terminal; `-` as a path | | todo |
-| search binary files | `--binary -a` | todo |
-| line terminators | `--crlf --null-data` | todo |
-| stop on the first non-matching line after a match | `--stop-on-nonmatch` | todo |
-| memory maps | `--mmap --no-mmap` | todo |
+| stdin when no path and stdin is not a terminal; `-` as a path | | done |
+| search binary files | `--binary -a` | done |
+| line terminators | `--crlf --null-data` | todo: the searcher and printers handle them; the regex side is missing |
+| stop on the first non-matching line after a match | `--stop-on-nonmatch` | done |
+| memory maps | `--mmap --no-mmap` | done |
 
 ## 2. Regex (regex-syntax, regex-automata)
 
@@ -52,7 +52,7 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 | word and line patterns | `-w -x` | todo |
 | multiline | `-U --multiline-dotall` | todo |
 | no Unicode | `--no-unicode` | todo |
-| patterns from a file | `-f` | todo |
+| patterns from a file | `-f` | done |
 | literal extraction (prefixes, inner, suffixes) feeding NVOL prefilters | | partial: one required literal |
 | engines: lazy DFA, PikeVM, bounded backtracker, one-pass | `--engine --dfa-size-limit --regex-size-limit` | todo |
 | PCRE2 | `-P --pcre2-version` | todo: ripgrep links PCRE2 (C); decide later |
@@ -64,10 +64,10 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 | `.gitignore`, `.ignore`, `.rgignore`, `.git/info/exclude`, hidden files | `--hidden --no-ignore` | done |
 | glob overrides, case-insensitive | `-g --iglob --glob-case-insensitive` | todo |
 | file types (ripgrep's default table) | `-t -T --type-add --type-clear --type-list` | todo |
-| the ignore toggles | `--no-ignore-dot -exclude -files -global -parent -vcs --no-require-git` | todo |
+| the ignore toggles | `--no-ignore-dot -exclude -files -global -parent -vcs --no-require-git` | partial: `-dot -exclude -vcs --no-require-git`; parent and global files are not read yet |
 | global gitignore (`core.excludesFile`), parent directories' ignore files | | todo |
 | extra ignore files | `--ignore-file --ignore-file-case-insensitive` | todo |
-| unrestricted | `-u -uu -uuu` | todo |
+| unrestricted | `-u -uu -uuu` | done |
 | depth, size, symlinks, one file system | `-d --max-filesize -L --one-file-system` | todo |
 | sorting | `--sort --sortr --sort-files` | todo |
 | file listing | `--files` | done |
@@ -85,10 +85,10 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 | Feature | Flags | Status |
 |---|---|---|
 | short flags combined, attached values | | done |
-| every `--no-` negation ripgrep accepts | | todo |
-| configuration file | `RIPGREP_CONFIG_PATH --no-config` | todo |
-| messages | `--no-messages --no-ignore-messages --debug --trace` | todo |
-| help, version, man page and completions | `-h --help -V --generate` | partial |
+| every `--no-` negation ripgrep accepts | | done |
+| configuration file | `RIPGREP_CONFIG_PATH --no-config` | done |
+| messages | `--no-messages --no-ignore-messages --debug --trace` | partial: `--no-messages`; the others are accepted and log nothing |
+| help, version, man page and completions | `-h --help -V --generate` | partial: grepper's own help and version text |
 | threads | `-j` | done |
 
 ## NVOL work this port needs

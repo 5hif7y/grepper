@@ -12,4 +12,12 @@ program_args :: proc() -> []string {
 SEP :: "/"
 
 // ripgrep's default path colour on Unix (crates/printer/src/color.rs)
-COLOR_PATH :: "\x1b[0m\x1b[35m"
+COLOR_PATH_DEFAULT :: Color_Kind.Magenta
+
+// grep-cli's is_readable_stdin on Unix: not a terminal, and a file, a FIFO or a socket
+is_readable_stdin :: proc() -> bool {
+	if os.is_tty(os.stdin) { return false }
+	fi, err := os.fstat(os.stdin, context.temp_allocator)
+	if err != nil { return false }
+	return fi.type == .Regular || fi.type == .Named_Pipe || fi.type == .Socket
+}

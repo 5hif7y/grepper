@@ -4,9 +4,8 @@ A recursive line-oriented search tool in [Odin](https://odin-lang.org): a port o
 [ripgrep](https://github.com/BurntSushi/ripgrep) whose SIMD comes from
 [NVOL](https://github.com/mirai-engine/NVOL), a generator of verified SIMD kernels.
 
-**Status: pre-alpha.** grepper is being built as a vertical MVP first: it should be usable end
-to end, with the subset of ripgrep's behaviour that day-to-day code search needs. The 1:1 port
-of ripgrep follows, crate by crate.
+**Status: pre-alpha.** The vertical MVP is done; the 1:1 port of ripgrep 14.1.1 is under way,
+crate by crate. [docs/PARITY.md](docs/PARITY.md) lists every ripgrep flag and its status.
 
 ## Goal
 
@@ -27,11 +26,12 @@ The same results as ripgrep, and equal or better speed, measured, not assumed:
 | MVP | recursive, parallel walk honouring `.gitignore`, `.ignore`, `.rgignore`, `.git/info/exclude`, hidden files | done |
 | MVP | regex through Odin's `core:text/regex`, with NVOL as the literal prefilter | done |
 | MVP | ripgrep's output format (headings, line numbers, colours, `-l`, `-c`, binary files) | done |
-| Port | regex-syntax / regex-automata (lazy DFA, literal extraction, Unicode) | next |
-| Port | globset, ignore, searcher, printer, cli: the remaining crates, 1:1 | later |
+| Port | the command line (every flag, negation and alias), grep-searcher, grep-printer (standard, summary, JSON) | done |
+| Port | ignore and globset: globs, file types, parent and global ignore files, sorting | next |
+| Port | regex-syntax / regex-automata (lazy DFA, literal extraction, Unicode) | later |
 
 `tests/compare.py` runs grepper and ripgrep on the same arguments and compares their output
-and exit code byte for byte. Today all 69 cases match ripgrep 14.1.1.
+and exit code byte for byte (timings aside). Today all 168 cases match ripgrep 14.1.1.
 
 ### Speed
 
@@ -52,7 +52,7 @@ an i5-7400 under Windows 10:
 
 **Caveats:**
 - This is a single machine and a single OS, and Linux has not been measured yet.
-- grepper does less than ripgrep: no Unicode case folding, and no stdin detection.
+- grepper does less than ripgrep: no Unicode case folding yet (see the known differences).
 - The 8-literal search is left out: ripgrep printed 0 or 8 lines of a file with a late NUL
   across identical runs.
 
@@ -61,18 +61,20 @@ around.
 
 ### Supported today
 
-`-F -i -e -n -N -H -I --heading --no-heading -l -c --color -j --hidden --no-ignore`; short
-flags combine and take attached values (`-nH`, `-j1`), as in ripgrep. Any other flag is an
-error, never ignored.
+ripgrep's command line is parsed whole: every flag, negation and alias, with ripgrep's
+messages, and `RIPGREP_CONFIG_PATH`. What grepper does not implement yet is refused with an
+error naming the flag, never ignored; [docs/PARITY.md](docs/PARITY.md) has the list. Among
+what works: context (`-A -B -C`, separators), `-v -m -q -o -b --column --vimgrep --passthru
+--trim -M -0 --colors -p`, `-c --count-matches -l --files-without-match --include-zero`,
+`--json`, `--stats`, `-f`, stdin, binary files (`-a`, `--binary`, `-uuu`) and memory-map
+semantics.
 
 ### Known differences from ripgrep
 
 - **`-i`, `\d \w \s`:** ASCII only. ripgrep's are Unicode. They come from the interim regex
   engine and are lifted by the regex-automata port.
-- **stdin:** with no path, grepper searches the current directory. ripgrep searches stdin when
-  it is not a terminal.
-- **Configuration and filters:** no `--glob`/`-g`, `--type`, context lines (`-A/-B/-C`), `-o`,
-  `-w`, `-v`, replacement or JSON output yet, and no global gitignore (`core.excludesFile`).
+- **Filters:** no `--glob`/`-g`, `--type`, `-w`/`-x`, `-r` or `-U` yet, and ignore files
+  in parent directories and the global gitignore (`core.excludesFile`) are not read yet.
 
 ## Building
 

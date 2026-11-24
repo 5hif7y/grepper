@@ -11,6 +11,10 @@ Matcher_Kind :: enum { Empty, Literal, Literals, Pike }
 
 Matcher :: struct {
 	kind:     Matcher_Kind,
+	// grep-regex's line_terminator(): whether the searcher may run the regex over many lines
+	// at once (the fast line path). Not when it holds a haystack anchor, `\A` or `\z`,
+	// which would then match at the buffer's ends instead of each line's.
+	line_term: bool,
 	needles:  []string,
 	finders:  []nvol.Memmem_Finder,
 	teddy:    nvol.Teddy,
@@ -37,6 +41,7 @@ matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 }
 
 matcher_literals :: proc(needles: []string) -> (m: Matcher) {
+	m.line_term = true
 	for n in needles {
 		if len(n) == 0 {        // an empty pattern matches every line
 			m.kind = .Empty
@@ -59,6 +64,7 @@ matcher_literals :: proc(needles: []string) -> (m: Matcher) {
 
 matcher_pike :: proc(h: ^Hir) -> (m: Matcher) {
 	m.kind = .Pike
+	m.line_term = !look_set_contains_anchor_haystack(h.props.look_set)
 	m.nfa = new(Rx_NFA)
 	m.nfa^ = rx_compile(h)
 	rx_finish(m.nfa)

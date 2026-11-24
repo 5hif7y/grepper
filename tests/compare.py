@@ -222,6 +222,13 @@ CASES = [
     ("newline class", ["[\n]", "plain.txt"]),
     ("nul banned", ["-e", "\\x00", "plain.txt"]),
     ("nul allowed as text", ["-a", "-c", "\\x00", "binary.bin"]),
+    # \A and \z: grep-regex gives the matcher no line terminator, so lines are searched one
+    # by one and the anchors match at each line's ends
+    ("haystack anchor start", ["-n", "\\Aalpha", "plain.txt"]),
+    ("haystack anchor end", ["-n", "-c", "a\\z", "plain.txt", "crlf.txt"]),
+    ("haystack anchor inverted", ["-n", "-v", "\\Aalpha", "plain.txt"]),
+    ("haystack anchor inverted max count context", ["-n", "-v", "-m", "2", "-A", "1", "\\Agamma", "plain.txt"]),
+    ("haystack anchor only matching", ["-o", "--column", "\\A\\w+", "words.txt"]),
     ("anchored class", ["-c", "^\\s*$", "plain.txt", "only_newlines.txt"]),
     # JSON Lines and statistics (timings normalized)
     ("json", ["--json", "alpha", "plain.txt", "crlf.txt"]),

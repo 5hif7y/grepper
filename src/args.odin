@@ -17,6 +17,7 @@ Options :: struct {
 	with_filename: Maybe(bool),  // -H / -I; default: on when several files may be searched
 	heading:       Maybe(bool),  // --heading / --no-heading; default: on when stdout is a terminal
 	files_with_matches: bool,    // -l
+	files:         bool,  // --files: list the files that would be searched, search nothing
 	count:         bool,  // -c
 	color:         Color_When,
 	hidden:        bool,  // --hidden
@@ -64,7 +65,7 @@ parse_args :: proc(raw: []string) -> (o: Options, err: Maybe(Args_Error)) {
 	for ; i < len(args); i += 1 {
 		a := args[i]
 		if no_more_flags || len(a) < 2 || a[0] != '-' {
-			if len(o.patterns) == 0 && !has_e(args) {
+			if len(o.patterns) == 0 && !has_e(args) && !has_flag(args, "--files") {
 				append(&o.patterns, a)
 			} else {
 				append(&o.paths, a)
@@ -90,6 +91,8 @@ parse_args :: proc(raw: []string) -> (o: Options, err: Maybe(Args_Error)) {
 			o.heading = true
 		case "--no-heading":
 			o.heading = false
+		case "--files":
+			o.files = true
 		case "-l", "--files-with-matches":
 			o.files_with_matches = true
 		case "-c", "--count":
@@ -118,10 +121,18 @@ parse_args :: proc(raw: []string) -> (o: Options, err: Maybe(Args_Error)) {
 			return o, Args_Error{strings.concatenate({"unknown flag: ", a})}
 		}
 	}
-	if len(o.patterns) == 0 {
+	if len(o.patterns) == 0 && !o.files {
 		return o, Args_Error{"no pattern given"}
 	}
 	return o, nil
+}
+
+has_flag :: proc(args: []string, flag: string) -> bool {
+	for a in args {
+		if a == "--" { return false }
+		if a == flag { return true }
+	}
+	return false
 }
 
 // -e anywhere means every positional argument is a path

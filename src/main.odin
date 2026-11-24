@@ -63,7 +63,9 @@ run :: proc(args: []string) -> int {
 		}
 	}
 	m: Matcher
-	if plain {
+	if o.files {
+		// nothing to match: the walk alone
+	} else if plain {
 		m = matcher_literals(o.patterns[:])
 	} else {
 		rerr: Maybe(string)

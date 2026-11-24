@@ -36,6 +36,17 @@ worker :: proc(sh: ^Shared) {
 	for {
 		job, ok := chan.recv(sh.jobs)
 		if !ok { break }
+		if sh.o.files {
+			put(&p, job.path)
+			put(&p, "\n")
+			if len(p.buf) >= FLUSH_AT {
+				sync.lock(&sh.out_lock)
+				os.write(os.stdout, p.buf[:])
+				sync.unlock(&sh.out_lock)
+				clear(&p.buf)
+			}
+			continue
+		}
 		data, err := os.read_entire_file(job.path, context.allocator)
 		if err != nil {
 			sync.lock(&sh.out_lock)
@@ -68,6 +79,11 @@ worker :: proc(sh: ^Shared) {
 			clear(&p.buf)
 		}
 	}
+	if len(p.buf) > 0 {        // --files: what is left
+		sync.lock(&sh.out_lock)
+		os.write(os.stdout, p.buf[:])
+		sync.unlock(&sh.out_lock)
+	}
 	delete(p.buf)
 }
 
@@ -98,30 +114,39 @@ inside_git :: proc(dir: string) -> bool {
 
 walk_dir :: proc(sh: ^Shared, shown, rel: string, stack: ^[dynamic]^Rules, in_git: bool) {
 	fs_dir := shown if shown != "" else "."
-	in_git := in_git
-	if !in_git && os.exists(strings.concatenate({fs_dir, "/.git"}, context.temp_allocator)) {
-		in_git = true
-	}
-	added := 0
-	if !sh.o.no_ignore {
-		added = load_dir_rules(fs_dir, rel, in_git, stack)
-	}
-	defer resize(stack, len(stack) - added)
-	entries, err := os.read_all_directory_by_path(fs_dir, context.allocator)
-	if err != nil {
+	entries, ok := list_dir(fs_dir)
+	if !ok {
 		sync.lock(&sh.out_lock)
-		eprint_error(fs_dir, err)
+		eprint_error(fs_dir, os.General_Error.Not_Exist)
 		sh.failed = true
 		sync.unlock(&sh.out_lock)
 		return
 	}
-	defer os.file_info_slice_delete(entries, context.allocator)
-	slice.sort_by(entries, proc(a, b: os.File_Info) -> bool { return a.name < b.name })
+	defer {
+		for e in entries { delete(e.name) }
+		delete(entries)
+	}
+	// which ignore files and .git the directory has, from its own listing: nothing probed
+	present: Ignore_Files
 	for e in entries {
-		if len(e.name) == 0 { continue }
-		if e.type == .Symlink { continue }
-		is_dir := e.type == .Directory
-		if !is_dir && e.type != .Regular { continue }
+		switch e.name {
+		case ".git": present += {.Git}
+		case ".gitignore": present += {.Gitignore}
+		case ".ignore": present += {.Ignore}
+		case ".rgignore": present += {.Rgignore}
+		}
+	}
+	in_git := in_git || .Git in present
+	added := 0
+	if !sh.o.no_ignore {
+		added = load_dir_rules(fs_dir, rel, in_git, present, stack)
+	}
+	defer resize(stack, len(stack) - added)
+	slice.sort_by(entries[:], proc(a, b: Dir_Entry) -> bool { return a.name < b.name })
+	for e in entries {
+		if len(e.name) == 0 || e.is_link { continue }
+		is_dir := e.is_dir
+		if !is_dir && !e.is_file { continue }
 		child_rel := e.name if rel == "" else strings.concatenate({rel, "/", e.name}, context.temp_allocator)
 		// ignore rules first; hidden entries are skipped only when no rule decides (a
 		// whitelist such as ripgrep's own `!/.github/` keeps one), as ripgrep's

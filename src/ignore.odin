@@ -163,11 +163,17 @@ stack_verdict :: proc(stack: []^Rules, rel_from_root, name: string, is_dir: bool
 	return .None
 }
 
+Ignore_File :: enum { Git, Gitignore, Ignore, Rgignore }
+Ignore_Files :: bit_set[Ignore_File]
+
 // the rules a directory adds: .gitignore (inside a git repository only, as ripgrep), then
-// .ignore, then .rgignore; and .git/info/exclude at a repository's root, below them
-load_dir_rules :: proc(fs_dir, rel_dir: string, in_git: bool, out: ^[dynamic]^Rules) -> (added: int) {
+// .ignore, then .rgignore; and .git/info/exclude at a repository's root, below them. Only the
+// files the directory's listing shows are opened.
+load_dir_rules :: proc(fs_dir, rel_dir: string, in_git: bool, present: Ignore_Files, out: ^[dynamic]^Rules) -> (added: int) {
 	files := [?]string{".git/info/exclude", ".gitignore", ".ignore", ".rgignore"}
+	need := [?]Ignore_File{.Git, .Gitignore, .Ignore, .Rgignore}
 	for f, k in files {
+		if need[k] not_in present { continue }
 		if k <= 1 && !in_git { continue }
 		path := strings.concatenate({fs_dir, "/", f})
 		data, err := os.read_entire_file(path, context.allocator)

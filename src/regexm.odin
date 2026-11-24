@@ -107,14 +107,43 @@ required_literal :: proc(p: string) -> string {
 	return strings.to_string(best)
 }
 
+// Odin's parser takes an unescaped `#` as the start of a comment even without
+// Ignore_Whitespace: `^#inc` compiles to `^` and matches every string at [0, 0]. ripgrep's `#`
+// is a literal (outside its x flag), so each bare `#` outside a class is escaped. To be audited
+// as a possible Odin bug, not reported yet.
+escape_hash :: proc(p: string) -> string {
+	if strings.index_byte(p, '#') < 0 { return p }
+	b: strings.Builder
+	in_class := false
+	for i := 0; i < len(p); i += 1 {
+		c := p[i]
+		switch {
+		case c == '\\' && i + 1 < len(p):
+			strings.write_byte(&b, c)
+			i += 1
+			strings.write_byte(&b, p[i])
+			continue
+		case in_class:
+			if c == ']' { in_class = false }
+		case c == '[':
+			in_class = true
+		case c == '#':
+			strings.write_byte(&b, '\\')
+		}
+		strings.write_byte(&b, c)
+	}
+	return strings.to_string(b)
+}
+
 matcher_regex :: proc(pattern: string, ignore_case: bool) -> (m: Matcher, err: Maybe(string)) {
 	flags: regex.Flags = {.Unicode}
 	if ignore_case { flags += {.Case_Insensitive} }
-	line_rx, e1 := regex.create(pattern, flags)
+	odin_pattern := escape_hash(pattern)
+	line_rx, e1 := regex.create(odin_pattern, flags)
 	if e1 != nil {
 		return m, strings.concatenate({"invalid regex: ", pattern})
 	}
-	buf_rx, e2 := regex.create(pattern, flags)
+	buf_rx, e2 := regex.create(odin_pattern, flags)
 	if e2 != nil {
 		return m, strings.concatenate({"invalid regex: ", pattern})
 	}

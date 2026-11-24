@@ -23,6 +23,7 @@ FILES = {
     "long.txt": b"".join(b"line %d %s\n" % (i, b"needle" if i % 97 == 0 else b"hay") for i in range(5000)),
     "utf8.txt": "café ü naïve\nnothing\nCAFÉ\n".encode(),
     "binary.bin": b"text with alpha\x00\x01\x02 more alpha\n",
+    "hash.txt": b"#include <a.h>\nx #include y\n  #inc\nno hash\n",
 }
 
 # a tree for the recursive cases: a git repository with nested ignore files, hidden entries and
@@ -102,6 +103,9 @@ CASES = [
     ("regex files", ["-l", "a.p", "plain.txt", "crlf.txt", "empty.txt"]),
     ("regex no match", ["zz+q", "plain.txt"]),
     ("regex utf8", ["-n", "caf.", "utf8.txt"]),
+    ("regex hash", ["-n", "^#inc", "hash.txt"]),
+    ("regex hash in class", ["-n", "[#]inc", "hash.txt"]),
+    ("regex hash escaped", ["-n", "\\#inc", "hash.txt"]),
     # the printer with colours and headings, byte for byte (the path colour is per platform)
     ("color lines", ["--color", "always", "-n", "alpha", "plain.txt"]),
     ("color heading", ["--color", "always", "--heading", "-n", "alpha", "plain.txt", "crlf.txt"]),

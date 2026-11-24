@@ -27,11 +27,12 @@ The same results as ripgrep, and equal or better speed, measured, not assumed:
 | MVP | regex through Odin's `core:text/regex`, with NVOL as the literal prefilter | done |
 | MVP | ripgrep's output format (headings, line numbers, colours, `-l`, `-c`, binary files) | done |
 | Port | the command line (every flag, negation and alias), grep-searcher, grep-printer (standard, summary, JSON) | done |
-| Port | ignore and globset: globs, file types, parent and global ignore files, sorting | next |
-| Port | regex-syntax / regex-automata (lazy DFA, literal extraction, Unicode) | later |
+| Port | ignore and globset: globs, file types, parent and global ignore files, sorting | done |
+| Port | regex-syntax / regex-automata (lazy DFA, literal extraction, Unicode) | next |
 
 `tests/compare.py` runs grepper and ripgrep on the same arguments and compares their output
-and exit code byte for byte (timings aside). Today all 168 cases match ripgrep 14.1.1.
+and exit code byte for byte (timings aside), and stderr when ripgrep fails. Today all 216
+cases match ripgrep 14.1.1.
 
 ### Speed
 
@@ -41,20 +42,25 @@ an i5-7400 under Windows 10:
 
 | search | lines | grepper | ripgrep | ratio |
 |---|---:|---:|---:|---:|
-| literal, common | 224507 | 1.51 s | 3.26 s | 0.46 |
-| literal, rare | 1 | 1.56 s | 3.03 s | 0.51 |
-| literal, `-c` | 2871 | 1.57 s | 2.81 s | 0.56 |
-| literal, `-l` | 414 | 1.49 s | 2.70 s | 0.55 |
-| regex with a literal | 38003 | 1.49 s | 3.12 s | 0.48 |
-| regex, no literal | 8670 | 1.33 s | 2.72 s | 0.49 |
-| regex, anchored | 9549 | 1.38 s | 2.78 s | 0.50 |
-| `-i` (ASCII) | 2329 | 2.42 s | 2.92 s | 0.83 |
+| literal, rare | 1 | 1.62 s | 2.36 s | 0.69 |
+| literal, `-c` | 2878 | 1.70 s | 2.87 s | 0.59 |
+| literal, `-l` | 416 | 1.66 s | 2.36 s | 0.70 |
+| 8 literals (Teddy) | 66005 | 2.31 s | 2.81 s | 0.82 |
+| regex with a literal | 38003 | 1.90 s | 2.62 s | 0.72 |
+| regex, no literal | 8671 | 1.86 s | 2.67 s | 0.70 |
+| regex, anchored | 9549 | 1.73 s | 2.70 s | 0.64 |
+
+Since the ignore crate was ported whole (parent directories' and the global ignore files,
+ripgrep's precedence between them), the walk does more work than the MVP's and grepper's
+lead shrank from about 0.5 to 0.6-0.8 of ripgrep's time. grepper still walks on one thread;
+ripgrep walks on all of them.
 
 **Caveats:**
 - This is a single machine and a single OS, and Linux has not been measured yet.
 - grepper does less than ripgrep: no Unicode case folding yet (see the known differences).
-- The 8-literal search is left out: ripgrep printed 0 or 8 lines of a file with a late NUL
-  across identical runs.
+- ripgrep prints a different number of lines across identical runs for files with a late
+  NUL (ripgrep's tests/data/sherlock-nul.txt in this corpus), so the searches whose output
+  includes such a file are compared and timed only when ripgrep's run agrees.
 
 See [docs/odin-findings.md](docs/odin-findings.md) for the Odin behaviours grepper works
 around.

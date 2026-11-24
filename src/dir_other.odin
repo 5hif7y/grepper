@@ -9,6 +9,8 @@ Dir_Entry :: struct {
 	is_dir:  bool,
 	is_file: bool,
 	is_link: bool,
+	is_hidden: bool,   // always false: on Unix only the leading '.' hides
+	size:    u64,
 }
 
 // A directory's entries through Odin's os.read_directory (to be measured against ripgrep on
@@ -19,7 +21,7 @@ list_dir :: proc(dir: string, allocator := context.allocator) -> (out: [dynamic]
 	defer os.file_info_slice_delete(infos, allocator)
 	for fi in infos {
 		append(&out, Dir_Entry{name = strings_clone(fi.name, allocator), is_dir = fi.type == .Directory,
-		                       is_file = fi.type == .Regular, is_link = fi.type == .Symlink})
+		                       is_file = fi.type == .Regular, is_link = fi.type == .Symlink, size = u64(max(fi.size, 0))})
 	}
 	return out, true
 }

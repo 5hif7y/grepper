@@ -102,7 +102,21 @@ run :: proc(args: []string) -> int {
 		matched = run_walk(&h, &m, false)
 	case .Files:
 		matched = run_walk(&h, nil, true)
-	case .Types, .Generate:
+	case .Types:
+		// --type-list: every type with its globs, sorted; exit 1 if there are none
+		o: Out
+		for d in h.types.defs {
+			out_str(&o, d.name)
+			out_str(&o, ": ")
+			for g, i in d.globs {
+				if i > 0 { out_str(&o, ", ") }
+				out_str(&o, g)
+			}
+			out_str(&o, "\n")
+		}
+		write_stdout(o.buf[:])
+		return 0 if len(h.types.defs) > 0 else 1
+	case .Generate:
 		unreachable()     // refused in hi_from_low
 	}
 	if matched && (h.quiet || !messages_errored) { return 0 }

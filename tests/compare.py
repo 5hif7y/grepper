@@ -217,6 +217,65 @@ CONFIG_CASES = [
     ("no config", ["--no-config", "alpha", "plain.txt"], b"-n\n"),
 ]
 
+# walk filters, run in tests/fixtures/tree2 (sorted, but for the --sort cases)
+TREE2_CASES = [
+    ("glob", ["-l", "-g", "*.rs", "alpha"]),
+    ("glob negated", ["-l", "-g", "!*.txt", "alpha"]),
+    ("glob dir", ["-l", "-g", "sub/**", "alpha"]),
+    ("glob alternates", ["-l", "-g", "*.{rs,py}", "alpha"]),
+    ("glob class", ["-l", "-g", "[ab].*", "alpha"]),
+    ("glob anchored", ["-l", "-g", "/*.rs", "alpha"]),
+    ("glob dir only", ["-l", "-g", "!sub/", "alpha"]),
+    ("iglob", ["-l", "--iglob", "*.RS", "alpha"]),
+    ("glob case insensitive", ["-l", "--glob-case-insensitive", "-g", "*.rs", "alpha"]),
+    ("glob case sensitive", ["-l", "-g", "*.RS", "alpha"]),
+    ("glob error", ["-l", "-g", "[", "alpha"]),
+    ("glob with hidden whitelist", ["-l", "-g", "*.gen", "alpha"]),
+    ("type", ["-l", "-t", "rust", "alpha"]),
+    ("type two", ["-l", "-t", "rust", "-t", "py", "alpha"]),
+    ("type not", ["-l", "-T", "txt", "alpha"]),
+    ("type make", ["-l", "-t", "make", "alpha"]),
+    ("type add", ["-l", "--type-add", "mine:*.gen", "-t", "mine", "alpha"]),
+    ("type add include", ["-l", "--type-add", "src:include:rust,py", "-t", "src", "alpha"]),
+    ("type clear", ["-l", "--type-clear", "rust", "--type-add", "rust:*.py", "-t", "rust", "alpha"]),
+    ("type unknown", ["-l", "-t", "nosuchtype", "alpha"]),
+    ("type bad def", ["-l", "--type-add", "bad", "alpha"]),
+    ("type list", ["--type-list"]),
+    ("type list added", ["--type-add", "zzz:*.zzz", "--type-clear", "rust", "--type-list"]),
+    ("max depth 0", ["--files", "-d", "0"]),
+    ("max depth 1", ["--files", "--max-depth", "1"]),
+    ("max depth 2", ["--files", "--maxdepth", "2"]),
+    ("max filesize", ["-l", "--max-filesize", "1K", "alpha"]),
+    ("max filesize bytes", ["-l", "--max-filesize", "2000", "alpha"]),
+    ("max filesize bad", ["-l", "--max-filesize", "1X", "alpha"]),
+    ("ignore file", ["-l", "--ignore-file", "../extra.ignore", "alpha"]),
+    ("ignore file missing", ["-l", "--ignore-file", "../nope.ignore", "alpha"]),
+    ("no ignore files", ["-l", "--no-ignore-files", "--ignore-file", "../extra.ignore", "alpha"]),
+    ("subdir root", ["-l", "alpha", "sub"]),
+    ("deep explicit root", ["-l", "alpha", "sub/deep"]),
+    ("no ignore parent", ["-l", "--no-ignore-parent", "alpha", "sub"]),
+    ("two roots", ["-l", "alpha", "sub", "d1"]),
+    ("hidden attribute", ["-l", "--hidden", "alpha"]),
+    ("no ignore dot keeps gitignore", ["-l", "--no-ignore-dot", "alpha"]),
+    ("no ignore vcs keeps rgignore", ["-l", "--no-ignore-vcs", "alpha"]),
+]
+
+# --sort cases compare their order too (one thread is implied)
+SORT_CASES = [
+    ("sort path", ["--files", "--sort", "path"]),
+    ("sortr path", ["--files", "--sortr", "path"]),
+    ("sort modified", ["--files", "--sort", "modified"]),
+    ("sortr modified", ["--files", "--sortr", "modified"]),
+    ("sort files", ["-l", "--sort-files", "alpha"]),
+    ("sort none", ["-l", "--sort", "path", "--sort", "none", "alpha"]),
+    ("sort bad", ["--files", "--sort", "size"]),
+]
+
+TREE3_CASES = [
+    ("not a repo", ["-l", "alpha"]),
+    ("not a repo, no require git", ["-l", "--no-require-git", "alpha"]),
+]
+
 # cases fed through stdin: (name, args, stdin bytes)
 STDIN_CASES = [
     ("stdin implicit", ["-n", "alpha"], b"x\nalpha one\ny alpha\n"),
@@ -260,6 +319,62 @@ TREE_CASES = [
 ]
 
 
+# a second tree for the walk filters: globs, types, depth, size, sorting, ignore-file
+# precedence (.rgignore over .ignore over .gitignore), parent directories' ignore files
+TREE2 = {
+    ".git/HEAD": b"ref: refs/heads/main\n",
+    ".gitignore": b"*.gen\n/anchored.txt\nsub/deep/\n!keep.gen\n",
+    ".rgignore": b"!force.gen\n",
+    ".ignore": b"ign_*.txt\n!ign_keep.txt\n",
+    "a.rs": b"alpha rust\n",
+    "b.py": b"alpha python\n",
+    "c.txt": b"alpha text\n",
+    "UPPER.RS": b"alpha upper rust\n",
+    "Makefile": b"alpha make\n",
+    "x.gen": b"alpha generated\n",
+    "keep.gen": b"alpha kept generated\n",
+    "force.gen": b"alpha forced\n",
+    "anchored.txt": b"alpha anchored root\n",
+    "ign_1.txt": b"alpha ign\n",
+    "ign_keep.txt": b"alpha ign kept\n",
+    "big.txt": b"alpha big\n" + b"x" * 2000 + b"\n",
+    "sub/.gitignore": b"!re.gen\nlocal.txt\n",
+    "sub/re.gen": b"alpha re-included\n",
+    "sub/other.gen": b"alpha other gen\n",
+    "sub/anchored.txt": b"alpha anchored sub\n",
+    "sub/local.txt": b"alpha local\n",
+    "sub/deep/z.txt": b"alpha deep z\n",
+    "sub/ok.rs": b"alpha sub rust\n",
+    "d1/one.txt": b"alpha one\n",
+    "d1/d2/two.txt": b"alpha two\n",
+    "d1/d2/d3/three.txt": b"alpha three\n",
+    "hiddenattr.txt": b"alpha hidden by attribute\n",
+}
+
+# a tree outside any git repository of its own (its .gitignore applies only with
+# --no-require-git); the grepper repository above it has no .git between
+TREE3 = {
+    ".gitignore": b"*.log\n",
+    "a.log": b"alpha log\n",
+    "b.txt": b"alpha txt\n",
+}
+
+
+def write_tree(name, files, mtimes=False):
+    tree = os.path.join(FIX, name)
+    shutil.rmtree(tree, ignore_errors=True)
+    for i, (rel, data) in enumerate(sorted(files.items())):
+        path = os.path.join(tree, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        if mtimes:
+            # distinct modification times, in reverse name order, for --sort modified
+            t = 1_700_000_000 + (len(files) - i) * 60
+            os.utime(path, (t, t))
+    return tree
+
+
 def write_fixtures():
     os.makedirs(FIX, exist_ok=True)
     for name, data in FILES.items():
@@ -272,6 +387,13 @@ def write_fixtures():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
             f.write(data)
+    tree2 = write_tree("tree2", TREE2, mtimes=True)
+    write_tree("tree3", TREE3)
+    with open(os.path.join(FIX, "extra.ignore"), "wb") as f:
+        f.write(b"c.txt\n*.py\n")
+    if os.name == "nt":
+        import ctypes
+        ctypes.windll.kernel32.SetFileAttributesW(os.path.join(tree2, "hiddenattr.txt"), 2)
 
 
 ENV = {k: v for k, v in os.environ.items() if k != "RIPGREP_CONFIG_PATH"}
@@ -292,7 +414,7 @@ def run(exe, args, extra=(), cwd=FIX, stdin=None, env=None):
         r = subprocess.run([exe, *extra, *args], cwd=cwd, capture_output=True, stdin=subprocess.DEVNULL, env=env or ENV)
     else:
         r = subprocess.run([exe, *extra, *args], cwd=cwd, capture_output=True, input=stdin, env=env or ENV)
-    return r.returncode, r.stdout
+    return r.returncode, r.stdout, r.stderr
 
 
 def main():
@@ -308,6 +430,11 @@ def main():
     bad = 0
     tree = os.path.join(FIX, "tree")
     cases = [(n, c, FIX, False, None) for n, c in CASES] + [(n, c, tree, True, None) for n, c in TREE_CASES]
+    tree2 = os.path.join(FIX, "tree2")
+    tree3 = os.path.join(FIX, "tree3")
+    cases += [(n, c, tree2, True, None) for n, c in TREE2_CASES]
+    cases += [(n, c, tree2, False, None) for n, c in SORT_CASES]
+    cases += [(n, c, tree3, True, None) for n, c in TREE3_CASES]
     cases = [(n, c, cwd, sort, stdin, None) for n, c, cwd, sort, stdin in cases]
     cases += [(n, c, FIX, False, i, None) for n, c, i in STDIN_CASES]
     cases += [(n, c, FIX, False, None, cfg) for n, c, cfg in CONFIG_CASES]
@@ -322,13 +449,20 @@ def main():
             env = dict(ENV, RIPGREP_CONFIG_PATH=path)
         g = run(a.grepper, args, ["-j1"], cwd, stdin, env)
         r = run(a.rg, args, ["-j1"], cwd, stdin, env)
+        g_err, r_err = g[2], r[2]
         g, r = (g[0], normalize(g[1])), (r[0], normalize(r[1]))
         if sort:
             g = g[0], b"".join(sorted(g[1].splitlines(True)))
             r = r[0], b"".join(sorted(r[1].splitlines(True)))
         if r[0] == 2:
-            # an error on both sides would compare equal while testing nothing
-            print(f"NOTE {name}: rg exited 2")
+            # an error must be the same error: stderr is compared, the program name aside
+            g_msg = g_err.replace(b"grepper: ", b"rg: ")
+            if g_msg != r_err:
+                bad += 1
+                print(f"DIFF {name} (stderr): {args}")
+                print(f"  grepper {g_msg[:300]!r}")
+                print(f"  rg      {r_err[:300]!r}")
+                continue
         if g != r:
             bad += 1
             print(f"DIFF {name}: {args}")

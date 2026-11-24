@@ -202,28 +202,28 @@ convert_usize :: proc(s: string) -> (n: int, err: Err) {
 	return int(v), nil
 }
 
-// grep-cli's parse_human_readable_size: digits with an optional K, M or G suffix
+// grep-cli's parse_human_readable_size, under ripgrep's "invalid size" context: digits with
+// an optional K, M or G suffix
 convert_human :: proc(s: string) -> (n: u64, err: Err) {
 	i := 0
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' { i += 1 }
-	if i == 0 || len(s) - i > 1 {
-		return 0, strings.concatenate({"invalid format for size '", s, "', which should be a non-empty sequence of digits followed by an optional 'K', 'M' or 'G' suffix"})
-	}
+	format := strings.concatenate({"invalid size: invalid format for size '", s, "', which should be a non-empty sequence of digits followed by an optional 'K', 'M' or 'G' suffix"})
+	if i == 0 { return 0, format }
 	v, e := convert_u64(s[:i])
-	if e != nil {
-		return 0, strings.concatenate({"failed to parse '", s, "' as a number"})
+	if msg, bad := e.?; bad {
+		// convert_u64's message is "value is not a valid number: <Rust's ParseIntError>"
+		return 0, strings.concatenate({"invalid size: invalid integer found in size '", s, "': ", msg[len("value is not a valid number: "):]})
 	}
 	mult: u64 = 1
-	if i < len(s) {
-		switch s[i] {
-		case 'K': mult = 1 << 10
-		case 'M': mult = 1 << 20
-		case 'G': mult = 1 << 30
-		case: return 0, strings.concatenate({"invalid size suffix '", s[i:], "'"})
-		}
+	switch s[i:] {
+	case "": return v, nil
+	case "K": mult = 1 << 10
+	case "M": mult = 1 << 20
+	case "G": mult = 1 << 30
+	case: return 0, format
 	}
-	if mult > 1 && v > max(u64) / mult {
-		return 0, strings.concatenate({"size too big in '", s, "'"})
+	if v > max(u64) / mult {
+		return 0, strings.concatenate({"invalid size: size too big in '", s, "'"})
 	}
 	return v * mult, nil
 }

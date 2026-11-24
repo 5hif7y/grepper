@@ -68,21 +68,24 @@ Hi_Args :: struct {
 	vimgrep:              bool,
 	with_filename:        bool,
 	no_messages:          bool,
+	no_ignore_messages:   bool,
+	no_ignore_parent:     bool,
+	no_ignore_global:     bool,
+	no_ignore_files:      bool,
+	ignore_file:          [dynamic]string,
+	ignore_file_case_insensitive: bool,
+	overrides:            ^Gitignore,
+	types:                Types,
+	max_depth:            Maybe(int),
+	max_filesize:         Maybe(u64),
+	follow:               bool,
+	one_file_system:      bool,
+	sort:                 Maybe(Sort_Mode),
 }
 
 // What grepper does not do yet: an error, never a silently different search.
 unsupported :: proc(low: ^Low_Args) -> string {
-	if len(low.globs) > 0 || len(low.iglobs) > 0 { return "-g/--glob and --iglob" }
-	if len(low.type_changes) > 0 { return "-t/-T/--type-add/--type-clear" }
-	if low.mode.kind == .Types { return "--type-list" }
 	if low.mode.kind == .Generate { return "--generate" }
-	if low.sort != nil { return "--sort/--sortr/--sort-files" }
-	if low.max_depth != nil { return "-d/--max-depth" }
-	if low.max_filesize != nil { return "--max-filesize" }
-	if low.follow { return "-L/--follow" }
-	if low.one_file_system { return "--one-file-system" }
-	if len(low.ignore_file) > 0 { return "--ignore-file" }
-	if low.ignore_file_case_insensitive { return "--ignore-file-case-insensitive" }
 	if low.encoding == .Some { return "-E/--encoding" }
 	if low.search_zip { return "-z/--search-zip" }
 	if low.pre != "" { return "--pre" }
@@ -292,6 +295,49 @@ hi_from_low :: proc(low: ^Low_Args) -> (h: Hi_Args, err: string) {
 	h.trim = low.trim
 	h.vimgrep = low.vimgrep
 	h.no_messages = low.no_messages
+	h.no_ignore_messages = low.no_ignore_messages
+	h.no_ignore_parent = low.no_ignore_parent
+	h.no_ignore_global = low.no_ignore_global
+	h.no_ignore_files = low.no_ignore_files
+	h.ignore_file = low.ignore_file
+	h.ignore_file_case_insensitive = low.ignore_file_case_insensitive
+	h.max_depth = low.max_depth
+	h.max_filesize = low.max_filesize
+	h.follow = low.follow
+	h.one_file_system = low.one_file_system
+	h.sort = low.sort
+
+	// file types: the defaults, then each --type-add/--type-clear/-t/-T in order
+	tb: Types_Builder
+	types_builder_add_defaults(&tb)
+	for c in low.type_changes {
+		switch c.kind {
+		case .Clear: types_builder_clear(&tb, c.value)
+		case .Add:
+			if e, bad := types_builder_add_def(&tb, c.value).?; bad { return h, e }
+		case .Select: types_builder_select(&tb, c.value, false)
+		case .Negate: types_builder_select(&tb, c.value, true)
+		}
+	}
+	types, terr := types_builder_build(&tb)
+	if e, bad := terr.?; bad { return h, e }
+	h.types = types
+
+	// --glob and --iglob: gitignore lines rooted at the current directory, the verdicts
+	// inverted (Override); --glob-case-insensitive for all, --iglob always
+	if len(low.globs) > 0 || len(low.iglobs) > 0 {
+		cwd, _ := os.get_working_directory(context.allocator)
+		g := gitignore_new(cwd)
+		g.case_insensitive = low.glob_case_insensitive
+		for glob in low.globs {
+			if e, bad := gitignore_add_line(g, glob).?; bad { return h, e }
+		}
+		g.case_insensitive = true
+		for glob in low.iglobs {
+			if e, bad := gitignore_add_line(g, glob).?; bad { return h, e }
+		}
+		h.overrides = g
+	}
 	return h, ""
 }
 

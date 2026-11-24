@@ -61,15 +61,16 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 
 | Feature | Flags | Status |
 |---|---|---|
-| `.gitignore`, `.ignore`, `.rgignore`, `.git/info/exclude`, hidden files | `--hidden --no-ignore` | done |
-| glob overrides, case-insensitive | `-g --iglob --glob-case-insensitive` | todo |
-| file types (ripgrep's default table) | `-t -T --type-add --type-clear --type-list` | todo |
-| the ignore toggles | `--no-ignore-dot -exclude -files -global -parent -vcs --no-require-git` | partial: `-dot -exclude -vcs --no-require-git`; parent and global files are not read yet |
-| global gitignore (`core.excludesFile`), parent directories' ignore files | | todo |
-| extra ignore files | `--ignore-file --ignore-file-case-insensitive` | todo |
+| `.gitignore`, `.ignore`, `.rgignore`, `.git/info/exclude`, hidden files (the Windows hidden attribute too) | `--hidden --no-ignore` | done |
+| skipping the file stdout is redirected to | | todo |
+| glob overrides, case-insensitive | `-g --iglob --glob-case-insensitive` | done |
+| file types (ripgrep's default table) | `-t -T --type-add --type-clear --type-list` | done |
+| the ignore toggles | `--no-ignore-dot -exclude -files -global -parent -vcs --no-require-git` | done |
+| global gitignore (`core.excludesFile`), parent directories' ignore files | | done |
+| extra ignore files | `--ignore-file --ignore-file-case-insensitive` | done |
 | unrestricted | `-u -uu -uuu` | done |
-| depth, size, symlinks, one file system | `-d --max-filesize -L --one-file-system` | todo |
-| sorting | `--sort --sortr --sort-files` | todo |
+| depth, size, symlinks, one file system | `-d --max-filesize -L --one-file-system` | partial: `-L` and `--one-file-system` are ported but have no test (symlinks need privileges on Windows) |
+| sorting | `--sort --sortr --sort-files` | done |
 | file listing | `--files` | done |
 
 ## 4. Input (encoding, decompression, preprocessors)

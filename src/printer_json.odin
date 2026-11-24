@@ -34,12 +34,7 @@ json_has_match :: proc(s: ^JSON_Sink) -> bool { return s.match_count > 0 }
 
 json_record_matches :: proc(s: ^JSON_Sink, searcher: ^Searcher, bytes: []u8, r: Range) {
 	clear(&s.p.matches)
-	end := r.end
-	if end > 0 && bytes[end - 1] == searcher.line_term {
-		end -= 1
-		if searcher.crlf && end > 0 && bytes[end - 1] == '\r' { end -= 1 }
-	}
-	find_iter_at(s.m, bytes[:end], r.start, r.end, &s.p.matches, r.start)
+	find_iter_at_in_context(searcher, s.m, bytes, r, &s.p.matches, r.start)
 	ms := s.p.matches[:]
 	// as ripgrep: the relative start against the length of the whole buffer
 	if len(ms) > 0 && range_empty(ms[len(ms) - 1]) && ms[len(ms) - 1].start >= len(bytes) {

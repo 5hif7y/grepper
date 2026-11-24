@@ -24,6 +24,7 @@ Matcher :: struct {
 	slots:    []int,
 	dfa:      Lazy_Dfa,
 	lit_slots: [2]int,     // group 0 of the last matcher_captures_at, for the literal kinds
+	non_matching: [256]bool,   // grep-regex's non_matching_bytes: bytes no match contains
 }
 
 // a worker's own copy: the memmem finders and the PikeVM's scratch change while searching
@@ -43,6 +44,10 @@ matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 
 matcher_literals :: proc(needles: []string) -> (m: Matcher) {
 	m.line_term = true
+	for &b in m.non_matching { b = true }
+	for n in needles {
+		for c in transmute([]u8)n { m.non_matching[c] = false }
+	}
 	for n in needles {
 		if len(n) == 0 {        // an empty pattern matches every line
 			m.kind = .Empty
@@ -66,6 +71,7 @@ matcher_literals :: proc(needles: []string) -> (m: Matcher) {
 matcher_pike :: proc(h: ^Hir) -> (m: Matcher) {
 	m.kind = .Pike
 	m.line_term = !look_set_contains_anchor_haystack(h.props.look_set)
+	m.non_matching = non_matching_bytes(h)
 	m.nfa = new(Rx_NFA)
 	m.nfa^ = rx_compile(h)
 	rx_finish(m.nfa)

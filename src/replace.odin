@@ -27,14 +27,21 @@ replacer_result :: proc(r: ^Replacer) -> (dst: []u8, matches: []Range, ok: bool)
 // aside): every match starting before range.end replaced by the interpolated replacement
 replacer_replace_all :: proc(r: ^Replacer, searcher: ^Searcher, m: ^Matcher, bytes: []u8, range: Range, replacement: string) {
 	replacer_clear(r)
-	// the line terminator, trimmed so look-around cannot see it, then put back
-	end := range.end
-	if end > 0 && bytes[end - 1] == searcher.line_term {
-		end -= 1
-		if searcher.crlf && end > 0 && bytes[end - 1] == '\r' { end -= 1 }
+	// in multi line mode the regex sees MAX_LOOK_AHEAD bytes past the range; otherwise the
+	// line terminator is trimmed, so look-around cannot see it, then put back
+	hay := bytes
+	term: []u8
+	if multi_line_with_matcher(searcher, m) {
+		if len(bytes) - range.end >= MAX_LOOK_AHEAD { hay = bytes[:range.end + MAX_LOOK_AHEAD] }
+	} else {
+		end := range.end
+		if end > 0 && bytes[end - 1] == searcher.line_term {
+			end -= 1
+			if searcher.crlf && end > 0 && bytes[end - 1] == '\r' { end -= 1 }
+		}
+		term = bytes[end:range.end]
+		hay = bytes[:end]
 	}
-	term := bytes[end:range.end]
-	hay := bytes[:end]
 	// replace_with_captures_in_context over captures_iter_at
 	last := range.start
 	last_end := range.start

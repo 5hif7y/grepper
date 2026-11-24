@@ -70,13 +70,7 @@ standard_has_match :: proc(s: ^Standard_Sink) -> bool { return s.match_count > 0
 record_matches :: proc(s: ^Standard_Sink, searcher: ^Searcher, bytes: []u8, r: Range) {
 	clear(&s.p.matches)
 	if !s.needs_match_granularity { return }
-	end := r.end
-	if end > 0 && bytes[end - 1] == searcher.line_term {
-		end -= 1
-		if searcher.crlf && end > 0 && bytes[end - 1] == '\r' { end -= 1 }
-	}
-	hay := bytes[:end]
-	find_iter_at(s.m, hay, r.start, r.end, &s.p.matches, r.start)
+	find_iter_at_in_context(searcher, s.m, bytes, r, &s.p.matches, r.start)
 	ms := s.p.matches[:]
 	// ripgrep compares the stored (relative) start with the absolute end
 	if len(ms) > 0 && range_empty(ms[len(ms) - 1]) && ms[len(ms) - 1].start >= r.end {
@@ -145,6 +139,7 @@ standard_matched :: proc(s: ^Standard_Sink, searcher: ^Searcher, mat: ^Sink_Matc
 		absolute_byte_offset = mat.absolute_byte_offset,
 		line_number = mat.line_number,
 		matches = s.p.matches[:],
+		multi_line = multi_line_with_matcher(searcher, s.m),
 	}
 	if dst, ms, ok := replacer_result(&s.p.replacer); ok { impl.bytes, impl.matches = dst, ms }
 	std_sink(&impl)
@@ -179,6 +174,7 @@ standard_context :: proc(s: ^Standard_Sink, searcher: ^Searcher, ctx: ^Sink_Cont
 		line_number = ctx.line_number,
 		is_context = true,
 		matches = s.p.matches[:],
+		multi_line = multi_line_with_matcher(searcher, s.m),
 	}
 	if dst, ms, ok := replacer_result(&s.p.replacer); ok { impl.bytes, impl.matches = dst, ms }
 	std_sink(&impl)
@@ -225,6 +221,7 @@ Std_Impl :: struct {
 	is_context:           bool,
 	matches:              []Range,
 	in_color_match:       bool,
+	multi_line:           bool,     // StandardImpl::multi_line: the matcher may span lines
 }
 
 @(private="file")
@@ -239,9 +236,137 @@ ws :: #force_inline proc(i: ^Std_Impl, b: string) { out_str(&i.s.p.out, b) }
 std_sink :: proc(i: ^Std_Impl) {
 	std_write_search_prelude(i)
 	if len(i.matches) == 0 {
-		std_sink_fast(i)
+		if i.multi_line && !i.is_context { std_sink_fast_multi_line(i) } else { std_sink_fast(i) }
 	} else {
-		std_sink_slow(i)
+		if i.multi_line && !i.is_context { std_sink_slow_multi_line(i) } else { std_sink_slow(i) }
+	}
+}
+
+// a multi line match with no match ranges: each of its lines with its own prelude
+std_sink_fast_multi_line :: proc(i: ^Std_Impl) {
+	offset := i.absolute_byte_offset
+	st := Line_Step{i.searcher.line_term, 0, len(i.bytes)}
+	k := 0
+	for {
+		line := line_step_next(&st, i.bytes) or_break
+		ln: Maybe(int)
+		if n, ok := i.line_number.?; ok { ln = n + k }
+		std_write_prelude(i, offset, ln, nil)
+		offset += line.end - line.start
+		std_write_line(i, i.bytes[line.start:line.end])
+		k += 1
+	}
+}
+
+std_sink_slow_multi_line :: proc(i: ^Std_Impl) {
+	if cfg(i).only_matching {
+		std_sink_slow_multi_line_only_matching(i)
+		return
+	} else if cfg(i).per_match {
+		std_sink_slow_multi_per_match(i)
+		return
+	}
+	bytes, matches := i.bytes, i.matches
+	midx := 0
+	count := 0
+	st := Line_Step{i.searcher.line_term, 0, len(bytes)}
+	for {
+		line := line_step_next(&st, bytes) or_break
+		ln: Maybe(int)
+		if n, ok := i.line_number.?; ok { ln = n + count }
+		std_write_prelude(i, i.absolute_byte_offset + line.start, ln, matches[0].start + 1)
+		count += 1
+		line = std_trim_ascii_prefix(i, bytes, line)
+		if std_exceeds_max_columns(i, bytes[line.start:line.end]) {
+			std_write_exceeded_line(i, bytes, line, matches, &midx)
+		} else {
+			std_write_colored_matches(i, bytes, line, matches, &midx)
+			std_write_line_term(i)
+		}
+	}
+}
+
+std_sink_slow_multi_line_only_matching :: proc(i: ^Std_Impl) {
+	spec := cfg(i).colors.matched
+	bytes, matches := i.bytes, i.matches
+	midx := 0
+	count := 0
+	st := Line_Step{i.searcher.line_term, 0, len(bytes)}
+	for {
+		line := line_step_next(&st, bytes) or_break
+		line = trim_line_terminator(i.searcher, bytes, line)
+		line = std_trim_ascii_prefix(i, bytes, line)
+		for !range_empty(line) {
+			if matches[midx].end <= line.start {
+				if midx + 1 < len(matches) {
+					midx += 1
+					continue
+				}
+				break
+			}
+			m := matches[midx]
+			if line.start < m.start {
+				line.start = min(line.end, m.start)
+			} else {
+				upto := min(line.end, m.end)
+				ln: Maybe(int)
+				if n, ok := i.line_number.?; ok { ln = n + count }
+				std_write_prelude(i, i.absolute_byte_offset + m.start, ln, m.start + 1)
+				this_line := Range{line.start, upto}
+				line.start = upto
+				if std_exceeds_max_columns(i, bytes[this_line.start:this_line.end]) {
+					std_write_exceeded_line(i, bytes, this_line, matches, &midx)
+				} else {
+					out_spec(&i.s.p.out, spec, bytes[this_line.start:this_line.end])
+					std_write_line_term(i)
+				}
+			}
+		}
+		count += 1
+	}
+}
+
+std_sink_slow_multi_per_match :: proc(i: ^Std_Impl) {
+	spec := cfg(i).colors.matched
+	bytes := i.bytes
+	for m in i.matches {
+		count := 0
+		st := Line_Step{i.searcher.line_term, 0, len(bytes)}
+		for {
+			line := line_step_next(&st, bytes) or_break
+			if line.start >= m.end { break }
+			if line.end <= m.start {
+				count += 1
+				continue
+			}
+			ln: Maybe(int)
+			if n, ok := i.line_number.?; ok { ln = n + count }
+			std_write_prelude(i, i.absolute_byte_offset + line.start, ln, max(m.start - line.start, 0) + 1)
+			count += 1
+			line = trim_line_terminator(i.searcher, bytes, line)
+			line = std_trim_ascii_prefix(i, bytes, line)
+			if std_exceeds_max_columns(i, bytes[line.start:line.end]) {
+				zero := 0
+				std_write_exceeded_line(i, bytes, line, []Range{m}, &zero)
+				continue
+			}
+			for !range_empty(line) {
+				if m.end <= line.start {
+					w(i, bytes[line.start:line.end])
+					line.start = line.end
+				} else if line.start < m.start {
+					upto := min(line.end, m.start)
+					w(i, bytes[line.start:upto])
+					line.start = upto
+				} else {
+					upto := min(line.end, m.end)
+					out_spec(&i.s.p.out, spec, bytes[line.start:upto])
+					line.start = upto
+				}
+			}
+			std_write_line_term(i)
+			if cfg(i).per_match_one_line { break }
+		}
 	}
 }
 

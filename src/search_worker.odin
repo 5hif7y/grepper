@@ -114,6 +114,23 @@ worker_new :: proc(h: ^Hi_Args, m: ^Matcher) -> (w: Worker) {
 	return
 }
 
+// stdin to its end
+read_all_stdin :: proc() -> (data: []u8, err: os.Error) {
+	buf: [dynamic]u8
+	chunk: [64 * 1024]u8
+	for {
+		n, e := os.read(os.stdin, chunk[:])
+		if n > 0 { append(&buf, ..chunk[:n]) }
+		// the end, or a closed pipe, as the line buffer reads them
+		if e == .EOF || e == .Broken_Pipe || (e == nil && n == 0) { break }
+		if e != nil {
+			delete(buf)
+			return nil, e
+		}
+	}
+	return buf[:], nil
+}
+
 // the search of one haystack; has_match decides the exit code
 worker_search :: proc(w: ^Worker, hay: Haystack) -> (has_match: bool, err: Maybe(string)) {
 	w.searcher.binary = w.h.binary_explicit if hay.explicit else w.h.binary_implicit
@@ -132,7 +149,21 @@ worker_search :: proc(w: ^Worker, hay: Haystack) -> (has_match: bool, err: Maybe
 		json_sink = json_sink_with_path(&w.json, &w.m, hay.path)
 		sink = &json_sink
 	}
-	if hay.is_stdin {
+	if multi_line_with_matcher(&w.searcher, &w.m) {
+		// the whole haystack in memory: read to the end, or the file's bytes
+		data: []u8
+		if hay.is_stdin {
+			all, e := read_all_stdin()
+			if e != nil { return false, os_error_message(e) }
+			data = all
+		} else {
+			d, e := os.read_entire_file(hay.path, context.allocator)
+			if e != nil { return false, os_error_message(e) }
+			data = d
+		}
+		defer delete(data)
+		multi_line_search(&w.searcher, &w.m, data, &sink)
+	} else if hay.is_stdin {
 		lb := Line_Buffer{handle = os.stdin, binary = w.searcher.binary, lineterm = w.searcher.line_term}
 		lb.buf = make([dynamic]u8, DEFAULT_BUFFER_CAPACITY)
 		defer delete(lb.buf)

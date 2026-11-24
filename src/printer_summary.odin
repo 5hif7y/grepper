@@ -56,19 +56,15 @@ summary_has_match :: proc(s: ^Summary_Sink) -> bool {
 
 summary_matched :: proc(s: ^Summary_Sink, searcher: ^Searcher, mat: ^Sink_Match) -> bool {
 	sink_match_count: u64 = 1
-	if s.has_stats {
+	is_multi_line := multi_line_with_matcher(searcher, s.m)
+	if s.has_stats || is_multi_line {
 		ms: [dynamic]Range
 		ms.allocator = context.temp_allocator
-		end := mat.range_in_buffer.end
-		buf := mat.buffer
-		if end > 0 && buf[end - 1] == searcher.line_term {
-			end -= 1
-			if searcher.crlf && end > 0 && buf[end - 1] == '\r' { end -= 1 }
-		}
-		find_iter_at(s.m, buf[:end], mat.range_in_buffer.start, mat.range_in_buffer.end, &ms, 0)
+		find_iter_at_in_context(searcher, s.m, mat.buffer, mat.range_in_buffer, &ms, 0)
 		sink_match_count = u64(len(ms))
 	}
-	s.match_count += 1
+	// a multi line match counts each match in it (for --count-matches)
+	s.match_count += sink_match_count if is_multi_line else 1
 	if s.has_stats {
 		s.stats.matches += sink_match_count
 		s.stats.matched_lines += u64(count_lines_of(mat.bytes, searcher.line_term))

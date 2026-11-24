@@ -192,7 +192,10 @@ build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
 	case .Word: hir = into_word(hir, !h.no_unicode)
 	case .None:
 	}
-	return matcher_pike(hir), nil
+	m = matcher_pike(hir)
+	// ripgrep gives the matcher no line terminator in multi line mode
+	if h.multiline { m.line_term = false }
+	return m, nil
 }
 
 // regex_syntax::escape: every meta character preceded by a backslash

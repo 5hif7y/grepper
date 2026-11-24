@@ -33,7 +33,11 @@ ATOMS = list("abcxyzABCXYZ0123 _-.") + ["é", "ß", "σ", "Σ", "K", "ſ", "日"
 CLASSES = ["[a-c]", "[^a ]", "[A-Z]", "[0-9]", "[[:alpha:]]", "[\\w-]", "[é-ü]", "[^\\s]",
            "[a-z&&[^aeiou]]", "\\w", "\\W", "\\d", "\\D", "\\s", "\\S", "\\pL", "\\p{Greek}",
            "\\p{Lu}", "\\PL", ".", "(?-u:\\w)", "(?-u:.)"]
-LOOKS = ["^", "$", "\\b", "\\B", "\\b{start}", "\\b{end}", "\\<", "\\>"]
+LOOKS = ["^", "$", "\\b", "\\B", "\\b{start}", "\\b{end}", "\\<", "\\>",
+         "\\b{start-half}", "\\b{end-half}",
+         # the ASCII forms: Unicode is on by default, so they need (?-u) to appear
+         "(?-u:\\b)", "(?-u:\\B)", "(?-u:\\b{start})", "(?-u:\\b{end})", "(?-u:\\b{start-half})",
+         "(?-u:\\b{end-half})"]
 QUANTS = ["*", "+", "?", "{2}", "{1,3}", "{2,}", "*?", "+?", "??", "{1,2}?"]
 FLAGS = ["(?i)", "(?-i)", "(?u)", "(?-u)", "(?s)", "(?U)", "(?x)"]
 

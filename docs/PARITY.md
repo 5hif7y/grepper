@@ -132,7 +132,7 @@ recorded here as such.
 | #3173 | ancestor ignore filter wrong for whitelisted hidden files | ignore | todo |
 | #3178 | `--json` summary statistics wrong | printer | todo |
 | #3179 | absolute paths with a global gitignore | ignore | todo |
-| #3593 | `-v -m N -A k` prints the rest of the input as matches | searcher | todo |
+| #3593 | `-v -m N -A k` prints the rest of the input as matches | searcher | does not apply: 14.1.1 prints the issue's case right (`1:a 2:b 3-foo`); the bug came with 15.x. `tests/line_paths.py` holds grepper to the behaviour the issue expects |
 | #3581 #1764 | `-g !DIRNAME/` does not match when the working directory is `DIRNAME` | globs | todo |
 | #3605 #3604 | an ignore file stops being read at an invalid UTF-8 line | ignore | todo |
 | #3527 | a lone `!` line in a gitignore is not a no-op | ignore | todo |
@@ -151,6 +151,16 @@ recorded here as such.
 | #3503 | multi-line match discovery gives up past `MAX_LOOK_AHEAD` | multiline | todo, with `-U` |
 | #3342 | compressed files detected by extension only, not by magic number | `-z` | todo, with `-z` |
 | #3222 | decompression commands do not separate flags from paths | `-z` | todo, with `-z` |
+
+### ripgrep 16.0.0 regressions grepper does not have
+
+Found comparing the official 16.0.0 Windows build (`ripgrep-16.0.0-x86_64-pc-windows-msvc.zip`,
+SHA-256 checked) with 14.1.1 and grepper. Not reported upstream; reporting is the user's call.
+
+| # | Bug | Reproduction | grepper |
+|---|---|---|---|
+| R16-1 | panic `assertion failed: start <= end` (crates/matcher/src/lib.rs:82), exit 127 | `printf 'a\nc\nfoox\nfoo\na\nc\nfoox\n' > h; rg -n -v -m1 -A3 foo h` (`-A2` and `-A1` do not panic); 25 of 500 random `-v -m -A` searches panicked | never panics (`tests/line_paths.py`) |
+| R16-2 | the slow line path (a regex with `\A` or `\z`) and the fast one disagree under `-m` with context: past the limit the slow path prints lines as context, the fast path as matches | `printf '1\nx\n2\nx\n3\n' > v; rg -n -v -m2 -A2 x v` prints `5:3`, `rg -n -v -m2 -A2 '\Ax' v` prints `5-3`; 222 of 500 random pairs (`\Afoo`/`^foo`, `foo\z`/`foo$`) differ, 0 with 14.1.1 | both paths agree, as in 14.1.1 (`tests/line_paths.py`: 300/300 on seeds 1-3; 16.0.0 gives 187/300 on seed 1) |
 
 ## NVOL work this port needs
 

@@ -126,7 +126,7 @@ recorded here as such.
 | #1332 #3001 | `rg -vf file` with an empty `file` should match every line | patterns | fixed, also under `-i`/`-S`, where 16.0.0 still prints nothing |
 | #2177 | a UTF-8 BOM at the start of `.gitignore` (and the other ignore files) is part of the first pattern | ignore | fixed |
 | #2944 | `--stats` "bytes searched" can be wrong | printer | todo |
-| #2990 | globs ending in `.` are mishandled | globset | todo |
+| #2990 | globs ending in `.` are mishandled | globset | fixed |
 | #3100 | `-r` drops line terminators | replace | todo, with `-r` |
 | #3108 | `-q --files-without-match` inverts the exit code | exit codes | fixed |
 | #3173 | ancestor ignore filter wrong for whitelisted hidden files | ignore | todo |

@@ -563,13 +563,15 @@ glob_choose_strategy :: proc(m: ^Glob_Matcher, tokens: []Glob_Token, opts: Glob_
 	}
 }
 
-// globset's Candidate: the base name (none when the path is empty or ends in '.') and its
-// extension (from the last '.')
+// globset's Candidate: the base name (none when the path is empty or ends in `..`) and its
+// extension (from the last '.'). Fix over 14.1.1 (ripgrep 15.0.0's #2990): 14.1.1 had no
+// base name for any path ending in '.', so `foo.` matched no file named `foo.`.
 candidate_parts :: proc(path: []u8) -> (basename, ext: []u8) {
-	if len(path) == 0 || path[len(path) - 1] == '.' { return nil, nil }
+	if len(path) == 0 { return nil, nil }
 	i := len(path)
 	for i > 0 && path[i - 1] != '/' { i -= 1 }
 	basename = path[i:]
+	if string(basename) == ".." { return nil, nil }
 	for k := len(basename) - 1; k >= 0; k -= 1 {
 		if basename[k] == '.' { return basename, basename[k:] }
 	}

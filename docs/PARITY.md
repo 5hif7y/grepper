@@ -156,9 +156,8 @@ recorded here as such.
 ### ripgrep 16.0.0 regressions grepper does not have
 
 Found comparing the official 16.0.0 Windows build (`ripgrep-16.0.0-x86_64-pc-windows-msvc.zip`,
-SHA-256 checked) with 14.1.1 and grepper. Kept here, not reported: no report goes to another
-project until NVOL and grepper are mature (decided 2026-11-24, after Odin declined #8551 as a
-design choice; NVOL's docs/TOOLCHAINS.md, T3).
+SHA-256 checked) with 14.1.1 and grepper. Written down here, not reported: issues and pull
+requests go to other projects only once grepper and NVOL are finished (decided 2026-11-24).
 
 | # | Bug | Reproduction | grepper |
 |---|---|---|---|

@@ -1,0 +1,6 @@
+/grepper
+/grepper.exe
+*.pdb
+*.o
+*.obj
+/build/

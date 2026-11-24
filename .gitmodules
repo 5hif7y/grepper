@@ -1,0 +1,3 @@
+[submodule "vendor/NVOL"]
+	path = vendor/NVOL
+	url = git@github.com:mirai-engine/NVOL.git

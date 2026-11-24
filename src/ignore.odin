@@ -148,20 +148,19 @@ rules_verdict :: proc(r: ^Rules, rel, name: string, is_dir: bool) -> Verdict {
 	return .None
 }
 
-// rel_from is the path from the search root; each Rules' dir is a prefix of it
-stack_ignored :: proc(stack: []^Rules, rel_from_root, name: string, is_dir: bool) -> bool {
+// the deepest rules with a verdict decide; rel_from_root is the path from the search root, and
+// each Rules' dir is a prefix of it
+stack_verdict :: proc(stack: []^Rules, rel_from_root, name: string, is_dir: bool) -> Verdict {
 	#reverse for r in stack {
 		rel := rel_from_root
 		if len(r.dir) > 0 {
 			rel = rel_from_root[len(r.dir) + 1:]
 		}
-		switch rules_verdict(r, rel, name, is_dir) {
-		case .Ignore: return true
-		case .Whitelist: return false
-		case .None:
+		if v := rules_verdict(r, rel, name, is_dir); v != .None {
+			return v
 		}
 	}
-	return false
+	return .None
 }
 
 // the rules a directory adds: .gitignore (inside a git repository only, as ripgrep), then

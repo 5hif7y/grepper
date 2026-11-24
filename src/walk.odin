@@ -119,12 +119,17 @@ walk_dir :: proc(sh: ^Shared, shown, rel: string, stack: ^[dynamic]^Rules, in_gi
 	slice.sort_by(entries, proc(a, b: os.File_Info) -> bool { return a.name < b.name })
 	for e in entries {
 		if len(e.name) == 0 { continue }
-		if e.name[0] == '.' && !sh.o.hidden { continue }
 		if e.type == .Symlink { continue }
 		is_dir := e.type == .Directory
 		if !is_dir && e.type != .Regular { continue }
 		child_rel := e.name if rel == "" else strings.concatenate({rel, "/", e.name}, context.temp_allocator)
-		if !sh.o.no_ignore && stack_ignored(stack[:], child_rel, e.name, is_dir) { continue }
+		// ignore rules first; hidden entries are skipped only when no rule decides (a
+		// whitelist such as ripgrep's own `!/.github/` keeps one), as ripgrep's
+		// matched_dir_entry
+		verdict := Verdict.None
+		if !sh.o.no_ignore { verdict = stack_verdict(stack[:], child_rel, e.name, is_dir) }
+		if verdict == .Ignore { continue }
+		if verdict == .None && e.name[0] == '.' && !sh.o.hidden { continue }
 		child_shown := join(shown, e.name)
 		if is_dir {
 			walk_dir(sh, child_shown, strings.clone(child_rel), stack, in_git)

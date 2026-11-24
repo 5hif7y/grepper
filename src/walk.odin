@@ -10,10 +10,11 @@ import "core:thread"
 import "core:time"
 
 // The walk and the searches over it (ripgrep's main.rs search / search_parallel / files /
-// files_parallel): one thread walks the directories (gitignore rules, hidden entries,
-// symlinks not followed) and sends haystacks to a channel; N workers search them, each into
-// its own buffer, written whole under a lock, as ripgrep's BufferWriter (which also writes
-// the file separator between non-empty buffers when there are several threads).
+// files_parallel): the directories are walked (gitignore rules, hidden entries, symlinks
+// not followed) by one thread or, in parallel, by several, and each thread searches the
+// files it finds (a Consumer). With several threads each file's output goes to its own
+// buffer, written whole under a lock, as ripgrep's BufferWriter (which also writes the file
+// separator between non-empty buffers when there are several threads).
 
 Shared :: struct {
 	h:         ^Hi_Args,
@@ -25,6 +26,7 @@ Shared :: struct {
 	searched:  bool,
 	quit:      bool,        // -q: a match ends the search
 	stats:     Stats,
+	files_mode: bool,
 }
 
 // rg: prefixed messages, which also make the exit code 2
@@ -47,65 +49,97 @@ write_stdout :: proc(b: []u8) {
 	if len(b) > 0 { os.write(os.stdout, b) }
 }
 
-search_worker_thread :: proc(sh: ^Shared) {
-	w := worker_new(sh.h, sh.m)
-	out := worker_out(&w)
+// What one thread does with the haystacks it gets: search them (a Worker, its own matcher
+// and printer) or, with --files, print their paths. As in ripgrep, the thread that walks a
+// directory searches the files it finds; only a walk that cannot run in parallel (-L,
+// --one-file-system) with several threads hands them over a channel. Handing every file to
+// another thread cost /usr/share (26,398 files) with -j1 23,631 context switches and
+// 1111 ms of CPU where rg -j1 takes 1 and 269.
+Consumer :: struct {
+	sh:    ^Shared,
+	files: bool,
+	w:     Worker,
+	o:     Out,      // --files: the paths printed, written in blocks
+}
+
+consumer_init :: proc(c: ^Consumer, sh: ^Shared, files_mode: bool) {
+	c.sh = sh
+	c.files = files_mode
+	if files_mode {
+		c.o.color = sh.h.color
+		return
+	}
+	c.w = worker_new(sh.h, sh.m)
+	out := worker_out(&c.w)
 	reserve(&out.buf, OUT_STREAM_AT)
 	// one searching thread: nothing else writes stdout while a file is searched
 	out.stream = sh.h.threads == 1
-	for {
-		hay, ok := chan.recv(sh.jobs)
-		if !ok { break }
-		if sync.atomic_load(&sh.quit) { continue }
-		sync.atomic_store(&sh.searched, true)
-		out_clear(out)
-		has_match, err := worker_search(&w, hay)
-		if msg, bad := err.?; bad {
-			err_message(sh, hay.path, ": ", msg)
-		}
-		free_all(context.temp_allocator)
-		sync.lock(&sh.out_lock)
-		if has_match { sh.matched = true }
-		if len(out.buf) > 0 {
-			if sep, has := sh.h.file_separator.?; has && sh.h.threads > 1 && sh.printed {
-				write_stdout(transmute([]u8)sep)
-				write_stdout([]u8{'\n'})
-			}
-			write_stdout(out.buf[:])
-			sh.printed = true
-		}
-		if sh.matched && sh.h.quit_after_match { sync.atomic_store(&sh.quit, true) }
-		stats_add(&sh.stats, w.stats)
-		w.stats = {}
-		sync.unlock(&sh.out_lock)
-	}
 }
 
-files_worker_thread :: proc(sh: ^Shared) {
-	o: Out
-	o.color = sh.h.color
-	term := sh.h.path_terminator.? or_else '\n'
-	for {
-		hay, ok := chan.recv(sh.jobs)
-		if !ok { break }
+consume :: proc(c: ^Consumer, hay: Haystack) {
+	sh := c.sh
+	if c.files {
 		sync.lock(&sh.out_lock)
 		sh.matched = true
 		quit := sh.h.quit_after_match
 		sync.unlock(&sh.out_lock)
-		if quit { sync.atomic_store(&sh.quit, true); continue }
-		out_spec(&o, sh.h.colors.path, printer_path(hay.path, sh.h.path_separator))
-		out_write(&o, []u8{term})
+		if quit { sync.atomic_store(&sh.quit, true); return }
+		term := sh.h.path_terminator.? or_else '\n'
+		out_spec(&c.o, sh.h.colors.path, printer_path(hay.path, sh.h.path_separator))
+		out_write(&c.o, []u8{term})
 		free_all(context.temp_allocator)
-		if len(o.buf) >= 1 << 16 {
+		if len(c.o.buf) >= OUT_STREAM_AT {
 			sync.lock(&sh.out_lock)
-			write_stdout(o.buf[:])
+			write_stdout(c.o.buf[:])
 			sync.unlock(&sh.out_lock)
-			clear(&o.buf)
+			clear(&c.o.buf)
 		}
+		return
 	}
+	if sync.atomic_load(&sh.quit) { return }
+	sync.atomic_store(&sh.searched, true)
+	out := worker_out(&c.w)
+	out_clear(out)
+	has_match, err := worker_search(&c.w, hay)
+	if msg, bad := err.?; bad {
+		err_message(sh, hay.path, ": ", msg)
+	}
+	free_all(context.temp_allocator)
 	sync.lock(&sh.out_lock)
-	write_stdout(o.buf[:])
+	if has_match { sh.matched = true }
+	if len(out.buf) > 0 {
+		if sep, has := sh.h.file_separator.?; has && sh.h.threads > 1 && sh.printed {
+			write_stdout(transmute([]u8)sep)
+			write_stdout([]u8{'\n'})
+		}
+		write_stdout(out.buf[:])
+		sh.printed = true
+	}
+	if sh.matched && sh.h.quit_after_match { sync.atomic_store(&sh.quit, true) }
+	stats_add(&sh.stats, c.w.stats)
+	c.w.stats = {}
 	sync.unlock(&sh.out_lock)
+}
+
+consumer_done :: proc(c: ^Consumer) {
+	if c.files && len(c.o.buf) > 0 {
+		sync.lock(&c.sh.out_lock)
+		write_stdout(c.o.buf[:])
+		sync.unlock(&c.sh.out_lock)
+		clear(&c.o.buf)
+	}
+}
+
+// the channel's end, for a walk on one thread feeding several searchers
+consumer_thread :: proc(sh: ^Shared) {
+	c: Consumer
+	consumer_init(&c, sh, sh.files_mode)
+	for {
+		hay, ok := chan.recv(sh.jobs)
+		if !ok { break }
+		consume(&c, hay)
+	}
+	consumer_done(&c)
 }
 
 // the path to print for an entry under a walked directory
@@ -135,6 +169,7 @@ Walker :: struct {
 	ancestors: [dynamic]string,   // with -L: the directories being walked, for loop detection
 	parents_cache: map[string]^Ignore_Node,   // the previous directory root's ancestors
 	queue:   ^Dir_Queue,          // a parallel walk: subdirectories are queued, not recursed
+	cons:    ^Consumer,           // this thread's searcher; nil: haystacks go to sh.jobs
 }
 
 // The ignore crate's WalkParallel, in its effect: several threads take directories from a
@@ -183,6 +218,10 @@ dq_finish :: proc(q: ^Dir_Queue) {
 }
 
 walk_thread :: proc(w: ^Walker) {
+	c: Consumer
+	consumer_init(&c, w.sh, w.sh.files_mode)
+	w.cons = &c
+	defer consumer_done(&c)
 	for {
 		job, ok := dq_pop(w.queue)
 		if !ok { break }
@@ -198,6 +237,8 @@ walk_thread :: proc(w: ^Walker) {
 walker_emit :: proc(w: ^Walker, hay: Haystack) {
 	if w.collect {
 		append(&w.sorted, hay)
+	} else if w.cons != nil {
+		consume(w.cons, hay)
 	} else {
 		chan.send(w.sh.jobs, hay)
 	}
@@ -300,6 +341,8 @@ walk_dir :: proc(w: ^Walker, ig: ^Ignore_Node, dir: string, depth: int) {
 			delete(path)
 		} else if is_file {
 			w.emit(w, Haystack{path = haystack_path(sh, path)})
+			// searched by now, unless it was collected or sent to another thread
+			if w.cons != nil && !w.collect { delete(path) }
 		} else {
 			delete(path)
 		}
@@ -456,27 +499,31 @@ walk_config :: proc(h: ^Hi_Args) -> ^Ignore_Shared {
 run_walk :: proc(h: ^Hi_Args, m: ^Matcher, files_mode: bool) -> bool {
 	started := time.tick_now()
 	global_hi = h
-	sh := Shared{h = h, m = m}
-	ch, _ := chan.create_buffered(chan.Chan(Haystack), 1024, context.allocator)
-	sh.jobs = ch
-	n := h.threads
-	if files_mode { n = 1 }
-	workers := make([]^thread.Thread, n)
-	for i in 0 ..< n {
-		// each worker with its own context: its own temporary allocator
-		if files_mode {
-			workers[i] = thread.create_and_start_with_poly_data(&sh, files_worker_thread)
-		} else {
-			workers[i] = thread.create_and_start_with_poly_data(&sh, search_worker_thread)
-		}
-	}
+	sh := Shared{h = h, m = m, files_mode = files_mode}
 	cfg := walk_config(h)
 	w := Walker{sh = &sh, cfg = cfg, root_ig = ignore_root(cfg), emit = walker_emit}
 	if s, has := h.sort.?; has && !(s.kind == .Path && !s.reverse) {
 		w.collect = true
 	}
-	parallel := n > 1 || (files_mode && h.threads > 1)
-	parallel = parallel && !w.collect && h.sort == nil && !h.follow && !h.one_file_system
+	parallel := h.threads > 1 && !w.collect && h.sort == nil && !h.follow && !h.one_file_system
+	// a walk on one thread with several searchers: the files go over a channel (-L and
+	// --one-file-system; --sort forces one thread)
+	channel := h.threads > 1 && !parallel
+	workers: []^thread.Thread
+	main_cons: Consumer
+	if channel {
+		ch, _ := chan.create_buffered(chan.Chan(Haystack), 1024, context.allocator)
+		sh.jobs = ch
+		n := 1 if files_mode else h.threads
+		workers = make([]^thread.Thread, n)
+		for i in 0 ..< n {
+			// each worker with its own context: its own temporary allocator
+			workers[i] = thread.create_and_start_with_poly_data(&sh, consumer_thread)
+		}
+	} else if !parallel {
+		consumer_init(&main_cons, &sh, files_mode)
+		w.cons = &main_cons
+	}
 	if parallel {
 		// the roots are queued in order, then walked by h.threads threads
 		q := new(Dir_Queue)
@@ -498,12 +545,19 @@ run_walk :: proc(h: ^Hi_Args, m: ^Matcher, files_mode: bool) -> bool {
 	}
 	if w.collect {
 		sort_haystacks(w.sorted[:], h.sort.?)
-		for hay in w.sorted { chan.send(sh.jobs, hay) }
+		for hay in w.sorted {
+			if sync.atomic_load(&sh.quit) { break }
+			if channel { chan.send(sh.jobs, hay) } else { consume(&main_cons, hay) }
+		}
 	}
-	chan.close(sh.jobs)
-	for t in workers {
-		thread.join(t)
-		thread.destroy(t)
+	if channel {
+		chan.close(sh.jobs)
+		for t in workers {
+			thread.join(t)
+			thread.destroy(t)
+		}
+	} else if !parallel {
+		consumer_done(&main_cons)
 	}
 	if h.has_implicit_path && !sh.searched && !files_mode {
 		err_message(&sh, "No files were searched, which means ripgrep probably applied a filter you didn't expect.\nRunning with --debug will show why files are being skipped.")

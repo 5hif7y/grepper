@@ -1,12 +1,13 @@
 // Copyright (c) 2026 Matías Alemán (5hif7y). SPDX-License-Identifier: MIT
 package grepper
 
+import "core:text/regex"
 import nvol "nvol:odin"
 
 // What a search looks for. Literals go to NVOL's kernels: one needle to memmem (memchr's
 // Finder in ripgrep), several to Teddy (aho-corasick's packed searcher), with a memmem per
 // needle when Teddy cannot take them (the cases aho-corasick also refuses).
-Matcher_Kind :: enum { Empty, Literal, Literals }
+Matcher_Kind :: enum { Empty, Literal, Literals, Regex }
 
 Matcher :: struct {
 	kind:    Matcher_Kind,
@@ -14,6 +15,22 @@ Matcher :: struct {
 	finders: []nvol.Memmem_Finder,
 	teddy:   nvol.Teddy,
 	teddy_ok: bool,
+	rx:      ^Regex_Matcher,
+}
+
+// a worker's own copy: the memmem finders and the regex capture change while searching
+matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
+	c = m
+	if m.finders != nil {
+		c.finders = make([]nvol.Memmem_Finder, len(m.finders))
+		copy(c.finders, m.finders)
+	}
+	if m.rx != nil {
+		c.rx = new(Regex_Matcher)
+		c.rx^ = m.rx^
+		c.rx.capture = regex.preallocate_capture()
+	}
+	return
 }
 
 matcher_literals :: proc(needles: []string) -> (m: Matcher) {
@@ -59,6 +76,8 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 			}
 		}
 		return s, e, best >= 0
+	case .Regex:
+		return find_regex(m.rx, hay, start, end)
 	}
 	return
 }

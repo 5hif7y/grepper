@@ -54,11 +54,25 @@ run :: proc(args: []string) -> int {
 		fmt.eprint(USAGE)
 		return 2
 	}
-	if !o.fixed || o.ignore_case {
-		fmt.eprintln("grepper: only fixed-string search (-F) without -i is implemented yet; use rg")
-		return 2
+	// literals go to NVOL directly: -F, or patterns without a regex metacharacter (as ripgrep
+	// extracts them); the rest to the regex engine
+	plain := !o.ignore_case
+	if plain && !o.fixed {
+		for p in o.patterns {
+			if has_meta(p) { plain = false }
+		}
 	}
-	m := matcher_literals(o.patterns[:])
+	m: Matcher
+	if plain {
+		m = matcher_literals(o.patterns[:])
+	} else {
+		rerr: Maybe(string)
+		m, rerr = matcher_regex(join_patterns(o.patterns[:], o.fixed), o.ignore_case)
+		if msg, bad := rerr.?; bad {
+			fmt.eprintfln("grepper: %s", msg)
+			return 2
+		}
+	}
 	// no path: the current directory, its entries printed without a "./" prefix (as ripgrep)
 	paths := o.paths[:] if len(o.paths) > 0 else []string{""}
 	several := len(paths) > 1

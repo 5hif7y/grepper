@@ -29,6 +29,7 @@ Shared :: struct {
 }
 
 worker :: proc(sh: ^Shared) {
+	m := matcher_clone(sh.m^)
 	p := sh.proto
 	p.buf = make([dynamic]u8, 0, 1 << 16)
 	p.no_flush = true
@@ -45,11 +46,14 @@ worker :: proc(sh: ^Shared) {
 		}
 		n := 0
 		if nul, binary := first_nul(data); !binary {
-			n = search_buffer(sh.m, data, job.path, &p, sh.mode)
+			n = search_buffer(&m, data, job.path, &p, sh.mode)
 		} else if job.explicit {
-			n = search_binary(sh.m, data, nul, job.path, &p, sh.mode)
+			n = search_explicit_binary(&m, data, nul, job.path, &p, sh.mode)
+		} else {
+			n = search_walked_binary(&m, data, job.path, &p, sh.mode)
 		}
 		delete(data)
+		free_all(context.temp_allocator)    // the regex VM's per-match allocations
 		if n > 0 || len(p.buf) > 0 {
 			sync.lock(&sh.out_lock)
 			if n > 0 { sh.found = true }
@@ -139,7 +143,8 @@ search_paths :: proc(o: ^Options, m: ^Matcher, proto: Printer, mode: Mode, paths
 	n := o.threads if o.threads > 0 else max(1, min(os.get_processor_core_count(), 12))
 	workers := make([]^thread.Thread, n)
 	for i in 0 ..< n {
-		workers[i] = thread.create_and_start_with_poly_data(&sh, worker, context)
+		// each worker with its own context: its own temporary allocator
+		workers[i] = thread.create_and_start_with_poly_data(&sh, worker)
 	}
 	for path in paths {
 		fi, err := os.stat(path if path != "" else ".", context.allocator)

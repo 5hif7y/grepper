@@ -48,6 +48,8 @@ TREE = {
     "docs/a/b/draft1.md": b"alpha draft\n",
     "docs/a/final.md": b"alpha final\n",
     "bin.dat": b"alpha\x00binary\n",
+    # a NUL past ripgrep's first 64 KiB fill: the lines before it are printed, then a warning
+    "late_nul.txt": b"alpha line\n" * 7000 + b"\x00alpha after\n",
 }
 
 CASES = [
@@ -76,6 +78,29 @@ CASES = [
     ("binary explicit no match", ["-F", "zzz", "binary.bin"]),
     ("binary explicit with others", ["-F", "alpha", "binary.bin", "plain.txt"]),
     ("binary explicit heading", ["-F", "--heading", "alpha", "binary.bin", "plain.txt"]),
+    # the regex engine (interim: Odin's core:text/regex); -i is ASCII-only for now, so the
+    # cases keep to ASCII letters
+    ("regex dot", ["-n", "alp.a", "plain.txt"]),
+    ("regex anchors start", ["-n", "^alpha", "plain.txt"]),
+    ("regex anchors end", ["-n", "alpha$", "plain.txt"]),
+    ("regex anchors end crlf", ["-n", "alpha$", "crlf.txt"]),
+    ("regex whole line", ["-n", "^$", "plain.txt"]),
+    ("regex class", ["-n", "[gl]a", "plain.txt"]),
+    ("regex negated class", ["-c", "line [0-9]+ [^h]", "long.txt"]),
+    ("regex alternation", ["-n", "gamma|again", "plain.txt"]),
+    ("regex group", ["-n", "(al|ga)(pha|mma)", "plain.txt"]),
+    ("regex quantifiers", ["-c", "line 1[0-9]{2} ", "long.txt"]),
+    ("regex optional", ["-n", "alphas?", "plain.txt"]),
+    ("regex word boundary", ["-n", "\\bline\\b", "plain.txt"]),
+    ("regex digits", ["-c", "\\d\\d\\d9 ", "long.txt"]),
+    ("regex no literal", ["-n", "[a-c]+[ ]+[a-d]", "plain.txt"]),
+    ("regex ignore case", ["-n", "-i", "ALPHA", "plain.txt"]),
+    ("fixed ignore case", ["-n", "-i", "-F", "AlPhA", "plain.txt"]),
+    ("regex several -e", ["-n", "-e", "gam+a", "-e", "^last"]  + ["plain.txt"]),
+    ("regex count", ["-c", "needle$", "long.txt"]),
+    ("regex files", ["-l", "a.p", "plain.txt", "crlf.txt", "empty.txt"]),
+    ("regex no match", ["zz+q", "plain.txt"]),
+    ("regex utf8", ["-n", "caf.", "utf8.txt"]),
 ]
 
 # recursive cases, run in tests/fixtures/tree; their lines are compared sorted (the walk order
@@ -92,6 +117,8 @@ TREE_CASES = [
     ("walk subdir", ["-F", "-l", "alpha", "src"]),
     ("walk explicit ignored file", ["-F", "alpha", "drop.log"]),
     ("walk two roots", ["-F", "-l", "alpha", "src", "docs"]),
+    ("walk regex", ["-n", "^int [a-z]+;$"]),
+    ("walk regex -l", ["-l", "al.ha (in|kept)"]),
 ]
 
 
@@ -110,7 +137,8 @@ def write_fixtures():
 
 
 def run(exe, args, extra=(), cwd=FIX):
-    r = subprocess.run([exe, *extra, *args], cwd=cwd, capture_output=True)
+    # stdin closed: with no path and a readable stdin, rg would search stdin instead
+    r = subprocess.run([exe, *extra, *args], cwd=cwd, capture_output=True, stdin=subprocess.DEVNULL)
     return r.returncode, r.stdout
 
 

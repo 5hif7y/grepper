@@ -114,6 +114,7 @@ Each one reproduced with rg 14.1.1 on Windows.
 | B2 | Parent-directory ignore rules with several roots depend on root order and thread scheduling: the cached ancestor nodes keep the `absolute_base` of the root that built them | in `tests/fixtures/tree` (`.gitignore` has `docs/**/draft*`), `rg -l alpha src docs` prints `docs\a\b\draft1.md` in 6 of 8 runs; with `-j1` in 8 of 8; `rg -l alpha docs` in 0 of 8 | 15.2.0, BUG #3320 #3376 #3419 | fixed |
 | B3 | Parent-directory ignore rules miss paths below the root: the path is made absolute after stripping the matching node's directory, not the root's, so the directories between them are lost | a git repo with `.gitignore` = `docs/a/b/draft*`: `rg -l alpha docs` prints `docs\a\b\draft1.md`, which `git check-ignore` ignores | 15.0.0, BUG #829 #2731 #2747 #2770 #2778 #2836 #2933 #3067 | fixed |
 | B4 | A NUL past the first 64 KiB fill: which lines print before the binary cut depends on how many bytes each read returns | three identical runs of an 8-literal search over the Research-LLOG tree printed 0, 8 and 8 lines of `ripgrep/tests/data/sherlock-nul.txt` (NUL at 77041) | not reported | already: grepper models full reads and prints the same lines every run |
+| B5 | `--ignore-file` and global gitignore patterns anchored at the working directory miss a search path given with `..` | from `a/b/c`, with `/haystack` in the ignore file, `rg --files --ignore-file F ../../..` lists `../../../a/b/c/haystack` (rg 16.0.0 too); with the absolute path, 16.0.0 ignores it | not fixed upstream | todo |
 
 ### Fixed upstream after 14.1.1
 
@@ -129,9 +130,9 @@ recorded here as such.
 | #2990 | globs ending in `.` are mishandled | globset | fixed |
 | #3100 | `-r` drops line terminators | replace | todo, with `-r` |
 | #3108 | `-q --files-without-match` inverts the exit code | exit codes | fixed |
-| #3173 | ancestor ignore filter wrong for whitelisted hidden files | ignore | todo |
+| #3173 | ancestor ignore filter wrong for whitelisted hidden files | ignore | fixed with B3 (the `.` root case is part of that code); on Windows 14.1.1 does not show it, since prefixes are stripped by components |
 | #3178 | `--json` summary statistics wrong | printer | fixed |
-| #3179 | absolute paths with a global gitignore | ignore | todo |
+| #3179 | absolute paths with a global gitignore | ignore | fixed (`--ignore-file` and the global gitignore) |
 | #3593 | `-v -m N -A k` prints the rest of the input as matches | searcher | does not apply: 14.1.1 prints the issue's case right (`1:a 2:b 3-foo`); the bug came with 15.x. `tests/line_paths.py` holds grepper to the behaviour the issue expects |
 | #3581 #1764 | `-g !DIRNAME/` does not match when the working directory is `DIRNAME` | globs | todo |
 | #3605 #3604 | an ignore file stops being read at an invalid UTF-8 line | ignore | already: grepper reads the lines after it, with no message, as 16.0.0 |

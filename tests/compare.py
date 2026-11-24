@@ -427,6 +427,11 @@ RG_BUGS = [
      (1, b'{"data":{"elapsed_total":{"human":"0s","nanos":0,"secs":0},"stats":{"bytes_printed":0,"bytes_searched":51,'
          b'"elapsed":{"human":"0s","nanos":0,"secs":0},"matched_lines":0,"matches":0,"searches":2,"searches_with_match":0}},'
          b'"type":"summary"}\n')),
+    # --ignore-file is rooted at the working directory: rg 14.1.1 roots it at "", so with an
+    # absolute search path /haystack never matches; the answer is the same search from there
+    # with no path, its paths made absolute
+    ("ignore file anchored, absolute root", "U3179", ["--files", "--ignore-file", os.path.join(FIX, "tree5", "anchor.ignore"), os.path.join(FIX, "tree5", "a")], "tree5/a/b/c", True,
+     (0, os.path.join(FIX, "tree5", "a", "b", "c", "other").encode() + b"\n")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it
@@ -506,6 +511,10 @@ TREE5 = {
     "cls/c/d.txt": b"hit\n",
     "cls/ayb.txt": b"hit\n",
     "cls/keep.txt": b"hit\n",
+    # an --ignore-file pattern anchored at the working directory
+    "anchor.ignore": b"/haystack\n",
+    "a/b/c/haystack": b"hit\n",
+    "a/b/c/other": b"hit\n",
 }
 
 # parent-directory rules that name directories below the search root (PARITY B3)

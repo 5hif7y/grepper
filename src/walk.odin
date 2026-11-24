@@ -362,8 +362,10 @@ walk_config :: proc(h: ^Hi_Args) -> ^Ignore_Shared {
 	c.overrides = h.overrides
 	c.types = &h.types
 	if !h.no_ignore_files {
+		// rooted at the working directory (fix over 14.1.1, ripgrep 15.0.0's #3179)
+		cwd, _ := os.get_working_directory(context.allocator)
 		for p in h.ignore_file {
-			g := gitignore_new("")
+			g := gitignore_new(cwd)
 			read, errs := gitignore_add_file(g, p)
 			if !read {
 				ignore_message(strings.concatenate({p, ": ", os_error_message(os.General_Error.Not_Exist)}))

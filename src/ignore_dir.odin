@@ -58,7 +58,12 @@ load_global_gitignore :: proc(sh: ^Ignore_Shared) {
 	if !sh.opts.git_global { return }
 	path, ok := gitconfig_excludes_path()
 	if !ok || !os.is_file(path) { return }
-	g := gitignore_new("", sh.opts.ignore_case_insensitive)
+	// rooted at the working directory, as --ignore-file's (fix over 14.1.1, ripgrep 15.0.0's
+	// #3179: rooted at "", an absolute search path was never stripped, and an anchored
+	// pattern never matched); without a known working directory, ripgrep skips the file
+	cwd, cerr := os.get_working_directory(context.allocator)
+	if cerr != nil { return }
+	g := gitignore_new(cwd, sh.opts.ignore_case_insensitive)
 	_, errs := gitignore_add_file(g, path)
 	for e in errs { if sh.messages != nil { sh.messages(strings.concatenate({path, ": ", e})) } }
 	sh.global = g

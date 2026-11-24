@@ -25,3 +25,6 @@ program_args :: proc() -> []string {
 	}
 	return out
 }
+
+// the separator ripgrep joins walked paths with on Windows (the root stays as given)
+SEP :: "\\"

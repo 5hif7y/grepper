@@ -8,3 +8,5 @@ import "core:os"
 program_args :: proc() -> []string {
 	return os.args
 }
+
+SEP :: "/"

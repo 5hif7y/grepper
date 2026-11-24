@@ -59,30 +59,25 @@ run :: proc(args: []string) -> int {
 		return 2
 	}
 	m := matcher_literals(o.patterns[:])
-	if len(o.paths) == 0 {
-		fmt.eprintln("grepper: a PATH is required for now (no directory walk yet); use rg")
-		return 2
+	// no path: the current directory, its entries printed without a "./" prefix (as ripgrep)
+	paths := o.paths[:] if len(o.paths) > 0 else []string{""}
+	several := len(paths) > 1
+	for path in paths {
+		if fi, err := os.stat(path if path != "" else ".", context.temp_allocator); err == nil && fi.type == .Directory {
+			several = true
+		}
 	}
 	tty := is_terminal()
 	p := Printer{
 		color = o.color == .Always || (o.color == .Auto && tty),
 		line_number = o.line_number.? or_else tty,
-		with_filename = o.with_filename.? or_else len(o.paths) > 1,
+		with_filename = o.with_filename.? or_else several,
 		heading = o.heading.? or_else tty,
 	}
 	mode := Mode.Files if o.files_with_matches else (Mode.Count if o.count else Mode.Lines)
-	found, failed := false, false
-	for path in o.paths {
-		data, err := os.read_entire_file(path, context.allocator)
-		if err != nil {
-			fmt.eprintfln("grepper: %s: %v", path, err)
-			failed = true
-			continue
-		}
-		if is_binary(data) { delete(data); continue }
-		if search_buffer(&m, data, path, &p, mode) > 0 { found = true }
-		delete(data)
-	}
-	flush(&p)
-	return 2 if failed else (0 if found else 1)
+	return search_paths(&o, &m, p, mode, paths)
+}
+
+eprint_error :: proc(path: string, err: os.Error) {
+	fmt.eprintfln("grepper: %s: %v", path if path != "" else ".", err)
 }

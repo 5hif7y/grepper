@@ -3,13 +3,33 @@ package grepper
 
 import nvol "nvol:odin"
 
-// ripgrep's binary detection when searching (its default `--binary` heuristic for files found
-// by the walk): a NUL byte in the first 8 KiB means the file is skipped
-BINARY_PROBE :: 8192
+import "core:strconv"
 
-is_binary :: proc(buf: []u8) -> bool {
-	_, found := nvol.memchr(0, buf[:min(len(buf), BINARY_PROBE)])
-	return found
+// ripgrep's binary handling, on the whole buffer: a file found by the walk with a NUL byte
+// anywhere is skipped; a file given on the command line is searched, and where lines would be
+// printed, one line stands for them all:
+// `[path: ]binary file matches (found "\0" byte around offset N)`, N the first NUL's offset
+// (-c and -l count and list it as any other file)
+first_nul :: proc(buf: []u8) -> (at: int, found: bool) {
+	return nvol.memchr(0, buf)
+}
+
+search_binary :: proc(m: ^Matcher, buf: []u8, nul: int, path: string, p: ^Printer, mode: Mode) -> int {
+	if mode != .Lines {
+		return search_buffer(m, buf, path, p, mode)
+	}
+	if _, _, ok := find(m, buf, 0, len(buf)); !ok {
+		return 0
+	}
+	if p.with_filename {
+		put_path(p, path)
+		put(p, ": ")
+	}
+	put(p, "binary file matches (found \"\\0\" byte around offset ")
+	tmp: [32]u8
+	put(p, strconv.write_int(tmp[:], i64(nul), 10))
+	put(p, ")\n")
+	return 1
 }
 
 Mode :: enum { Lines, Count, Files }

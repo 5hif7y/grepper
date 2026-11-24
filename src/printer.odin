@@ -19,7 +19,7 @@ Printer :: struct {
 	line_number:   bool,
 	with_filename: bool,
 	heading:       bool,
-	printed_files: int,       // for the blank line between files in heading mode
+	no_flush:      bool,      // a worker's buffer: written whole, per file, by the walker
 }
 
 put :: proc(p: ^Printer, s: string) {
@@ -43,7 +43,7 @@ flush :: proc(p: ^Printer) {
 }
 
 maybe_flush :: proc(p: ^Printer) {
-	if len(p.buf) >= FLUSH_AT { flush(p) }
+	if !p.no_flush && len(p.buf) >= FLUSH_AT { flush(p) }
 }
 
 put_path :: proc(p: ^Printer, path: string) {
@@ -52,13 +52,12 @@ put_path :: proc(p: ^Printer, path: string) {
 	if p.color { put(p, COLOR_RESET) }
 }
 
-// before a file's first line in heading mode: a blank line after the previous file, the path
+// before a file's first line in heading mode: its path (the blank line between files is the
+// walker's, which writes the files in turn)
 begin_file :: proc(p: ^Printer, path: string) {
 	if !p.heading || !p.with_filename { return }
-	if p.printed_files > 0 { put(p, "\n") }
 	put_path(p, path)
 	put(p, "\n")
-	p.printed_files += 1
 }
 
 // one matching line, its matches highlighted: [path:][line:]text\n

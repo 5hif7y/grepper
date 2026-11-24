@@ -26,7 +26,32 @@ Options :: struct {
 
 Args_Error :: struct { msg: string }
 
-parse_args :: proc(args: []string) -> (o: Options, err: Maybe(Args_Error)) {
+// ripgrep's short forms, expanded first: a value attached to its flag (`-j1`, `-eFOO`) and
+// several flags in one argument (`-nH`, `-Fn`)
+expand_short :: proc(args: []string) -> []string {
+	out: [dynamic]string
+	done := false
+	for a in args {
+		if done || a == "--" || len(a) <= 2 || a[0] != '-' || a[1] == '-' {
+			if a == "--" { done = true }
+			append(&out, a)
+			continue
+		}
+		for k := 1; k < len(a); k += 1 {
+			c := a[k:k + 1]
+			if c == "e" || c == "j" {
+				append(&out, strings.concatenate({"-", c}))
+				if k + 1 < len(a) { append(&out, a[k + 1:]) }
+				break
+			}
+			append(&out, strings.concatenate({"-", c}))
+		}
+	}
+	return out[:]
+}
+
+parse_args :: proc(raw: []string) -> (o: Options, err: Maybe(Args_Error)) {
+	args := expand_short(raw)
 	i := 0
 	no_more_flags := false
 	value :: proc(args: []string, i: ^int, flag: string) -> (string, Maybe(Args_Error)) {

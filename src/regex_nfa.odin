@@ -109,6 +109,7 @@ Rx_NFA :: struct {
 	start:       i32,
 	slots:       int,              // 2 per capture group, group 0 included
 	group_names: [dynamic]Maybe(string),
+	pre:         ^Prefilter,       // where a match may start, from the regex's prefixes (nil: none)
 }
 
 Rx_Ref :: struct { start, end: i32 }
@@ -483,6 +484,7 @@ look_matches :: proc(l: Look, h: []u8, at: int) -> bool {
 // The PikeVM: leftmost-first, the threads in priority order, each with its capture slots
 
 Pike_Cache :: struct {
+	pre:    ^Prefilter,            // the NFA's prefilter, this cache's own copy
 	clist, nlist: [dynamic]i32,
 	cslots, nslots: [dynamic]int,      // per thread in the list: n.slots values
 	mark:   []u32,
@@ -498,6 +500,7 @@ Pike_Frame :: struct {
 }
 
 pike_cache_new :: proc(n: ^Rx_NFA) -> (c: Pike_Cache) {
+	c.pre = prefilter_clone(n.pre)
 	c.mark = make([]u32, len(n.states))
 	c.scratch = make([]int, n.slots)
 	return
@@ -555,6 +558,13 @@ pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchor
 	matched := false
 	for &x in slots { x = -1 }
 	for at := start; at <= end; at += 1 {
+		// no thread alive and no match yet: skip to where the prefilter says a match may
+		// start, as regex-automata's PikeVM does
+		if len(c.clist) == 0 && !matched && !anchored && c.pre != nil {
+			r, ok := prefilter_find(c.pre, h, at, end)
+			if !ok { break }
+			at = r.start
+		}
 		// a new thread at the lowest priority, until a match is found
 		if !matched && (!anchored || at == start) {
 			c.gen += 1

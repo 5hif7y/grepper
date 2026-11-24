@@ -136,7 +136,7 @@ build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
 		// `-v` matches every line. ripgrep joins zero patterns into the empty regex, which
 		// matches everything; 16.0.0 avoids that only when the patterns are fixed strings
 		// (not under -i or -S).
-		return matcher_pike(hir_fail()), nil
+		return matcher_pike(hir_fail(), nil), nil
 	}
 	if rg_is_fixed_strings(h) {
 		if h.boundary == .None && !h.null_data {
@@ -192,7 +192,7 @@ build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
 	case .Word: hir = into_word(hir, !h.no_unicode)
 	case .None:
 	}
-	m = matcher_pike(hir)
+	m = matcher_from_hir(hir)
 	// ripgrep gives the matcher no line terminator in multi line mode
 	if h.multiline { m.line_term = false }
 	return m, nil

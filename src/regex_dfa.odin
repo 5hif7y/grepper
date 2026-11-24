@@ -21,6 +21,7 @@ DFA_QUIT    :: -3
 DFA_NO_EOI  :: -4      // at the end: no match
 
 Dfa_State :: struct {
+	is_start: bool,          // no seeds: only the unanchored start's closure is alive
 	ctx:   Dfa_Ctx,
 	seeds: []i32,
 	trans: [257]i32,     // per byte, and EOI at 256
@@ -28,6 +29,7 @@ Dfa_State :: struct {
 
 Lazy_Dfa :: struct {
 	nfa:          ^Rx_NFA,
+	pre:          ^Prefilter,     // the NFA's prefilter, this DFA's own copy
 	states:       [dynamic]Dfa_State,
 	index:        map[string]i32,
 	has_uni_word: bool,
@@ -39,10 +41,13 @@ Lazy_Dfa :: struct {
 	next:         [dynamic]i32,
 	key:          [dynamic]u8,
 	budget:       int,        // states before the cache is cleared
+	start_ids:    [Dfa_Ctx]i32, // the start state per context once built (-1: not yet)
 }
 
 dfa_new :: proc(n: ^Rx_NFA) -> (d: Lazy_Dfa) {
 	d.nfa = n
+	d.pre = prefilter_clone(n.pre)
+	for &x in d.start_ids { x = -1 }
 	d.mark = make([]u32, len(n.states))
 	d.budget = 4096
 	for s in n.states {
@@ -109,7 +114,7 @@ state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32) -> i32 {
 		append(&d.key, u8(x), u8(x >> 8), u8(x >> 16), u8(x >> 24))
 	}
 	if id, ok := d.index[string(d.key[:])]; ok { return id }
-	st := Dfa_State{ctx = ctx, seeds = slice.clone(seeds)}
+	st := Dfa_State{ctx = ctx, seeds = slice.clone(seeds), is_start = len(seeds) == 0}
 	for &t in st.trans { t = DFA_UNKNOWN }
 	append(&d.states, st)
 	id := i32(len(d.states) - 1)
@@ -118,7 +123,16 @@ state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32) -> i32 {
 }
 
 @(private="file")
+start_state :: #force_inline proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx) -> i32 {
+	if id := d.start_ids[ctx]; id >= 0 { return id }
+	id := state_for(d, ctx, nil)
+	d.start_ids[ctx] = id
+	return id
+}
+
+@(private="file")
 dfa_reset :: proc(d: ^Lazy_Dfa) {
+	for &x in d.start_ids { x = -1 }
 	for s in d.states { delete(s.seeds) }
 	clear(&d.states)
 	for k in d.index { delete(k) }
@@ -192,8 +206,19 @@ Dfa_Result :: enum { No_Match, Match, Quit }
 dfa_find_earliest :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa_Result) {
 	ctx := Dfa_Ctx.Start
 	if start > 0 { ctx = byte_ctx(h[start - 1]) }
-	sid := state_for(d, ctx, nil)
+	sid := start_state(d, ctx)
 	for i := start; i < end; i += 1 {
+		// in a start state, the prefilter skips to where a match may start (find_fwd_imp);
+		// a prefilter exists only for a regex that cannot match the empty string, so no
+		// candidate means no match
+		if d.pre != nil && d.states[sid].is_start {
+			r, ok := prefilter_find(d.pre, h, i, end)
+			if !ok { return 0, .No_Match }
+			if r.start > i {
+				i = r.start
+				sid = start_state(d, byte_ctx(h[i - 1]))
+			}
+		}
 		b := h[i]
 		next := d.states[sid].trans[b]
 		if next == DFA_UNKNOWN {

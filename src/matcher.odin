@@ -68,13 +68,40 @@ matcher_literals :: proc(needles: []string) -> (m: Matcher) {
 	return
 }
 
-matcher_pike :: proc(h: ^Hir) -> (m: Matcher) {
+// regex-automata's meta strategy for one regex, as far as grepper has its engines: the
+// regex's prefix literals (strategy.rs's `prefixes`, optimized for leftmost-first), unless
+// the regex is anchored at the start. When they are exact and the regex has no captures and
+// no look-around, the regex is those literals (Pre::from_prefixes) and a literal matcher
+// runs it alone; otherwise they become the prefilter of the lazy DFA and the PikeVM.
+matcher_from_hir :: proc(h: ^Hir) -> (m: Matcher) {
+	if look_set_contains(h.props.look_set_prefix, .Start) { return matcher_pike(h, nil) }
+	e := extractor_new(.Prefix)
+	prefixes := extractor_extract(&e, h)
+	seq_optimize_for_prefix_by_preference(&prefixes)
+	lits, finite := seq_literals(prefixes)
+	if !finite { return matcher_pike(h, nil) }
+	needles := make([][]u8, len(lits))
+	for l, i in lits { needles[i] = l.bytes[:] }
+	pre, built := prefilter_new(needles)
+	if !built { return matcher_pike(h, nil) }
+	if seq_is_exact(prefixes) && h.props.explicit_captures_len == 0 && h.props.look_set == 0 {
+		strs := make([]string, len(lits))
+		for l, i in lits { strs[i] = string(l.bytes[:]) }
+		m = matcher_literals(strs)
+		m.non_matching = non_matching_bytes(h)
+		return m
+	}
+	return matcher_pike(h, pre)
+}
+
+matcher_pike :: proc(h: ^Hir, pre: ^Prefilter) -> (m: Matcher) {
 	m.kind = .Pike
 	m.line_term = !look_set_contains_anchor_haystack(h.props.look_set)
 	m.non_matching = non_matching_bytes(h)
 	m.nfa = new(Rx_NFA)
 	m.nfa^ = rx_compile(h)
 	rx_finish(m.nfa)
+	m.nfa.pre = pre
 	m.cache = pike_cache_new(m.nfa)
 	m.slots = make([]int, m.nfa.slots)
 	m.dfa = dfa_new(m.nfa)

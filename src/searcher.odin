@@ -24,6 +24,7 @@ Searcher :: struct {
 	stop_on_nonmatch: bool,
 	binary:           Binary_Detection,
 	mmap:             bool,
+	max_matches:      Maybe(u64),   // -m, which the multi line search counts in matches
 }
 
 max_context :: proc(s: ^Searcher) -> int { return max(s.before_context, s.after_context) }
@@ -174,6 +175,7 @@ Core :: struct {
 	after_context_left:   int,
 	has_sunk:             bool,
 	has_matched:          bool,
+	ml_count:             u64,      // matches found by the multi line search, for -m
 }
 
 core_new :: proc(s: ^Searcher, m: ^Matcher, sink: ^Sink, binary: bool) -> (c: Core) {

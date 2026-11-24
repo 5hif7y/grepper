@@ -85,9 +85,17 @@ find_iter_at_in_context :: proc(searcher: ^Searcher, m: ^Matcher, bytes: []u8, r
 }
 
 // glue.rs's MultiLine: matches found over the whole slice, the lines holding a match joined
-// with those of the next match when they touch, then sunk as one match
+// with those of the next match when they touch, then sunk as one match.
+//
+// -m counts matches here, not sunk blocks: fix over 14.1.1 (ripgrep 15.0.0's #2094/#3076),
+// where -m limited the blocks the printer saw, and a block joins every match whose lines
+// touch, so `rg -U -m1 '^'` printed the whole file. ripgrep fixed it by moving the limit from
+// the printer to the searcher in every mode (a6e0be3), which also changed line mode and
+// brought the regressions of PARITY's #3593, R16-1 and R16-2; grepper counts matches only in
+// this multi line search and keeps 14.1.1's line mode.
 multi_line_search :: proc(s: ^Searcher, m: ^Matcher, slice: []u8, sink: ^Sink) {
 	c := core_new(s, m, sink, true)
+	c.ml_count = 0
 	last_match: Maybe(Range)
 	if sink_begin(sink, s) {
 		binary_upto := min(len(slice), DEFAULT_BUFFER_CAPACITY)
@@ -176,11 +184,13 @@ ml_sink_context :: proc(c: ^Core, slice: []u8, r: Range) -> bool {
 	return core_before_context_by_line(c, slice, r.start)
 }
 
-// the first match in slice[pos:], as an absolute range
+// the first match in slice[pos:], as an absolute range; none once -m matches were found
 @(private="file")
 ml_find :: proc(c: ^Core, slice: []u8) -> (r: Range, ok: bool) {
+	if limit, has := c.s.max_matches.?; has && !c.s.invert_match && c.ml_count >= limit { return }
 	sub := slice[c.pos:]
 	s, e := find(c.m, sub, 0, len(sub)) or_return
+	c.ml_count += 1
 	return {c.pos + s, c.pos + e}, true
 }
 

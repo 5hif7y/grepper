@@ -146,7 +146,7 @@ recorded here as such.
 | #3534 | symlink loops above the search root are not detected | walk | todo: as #2552 |
 | #3382 | buffered matches lost after an error in a parallel search | walk | todo: needs a read that fails mid-search |
 | #3617 | on Windows, stdout that is a pipe is compared against the searched files | walk | todo, with the stdout check |
-| #2094 #3076 | `-m` with `-U` shows too many matches | multiline | todo |
+| #2094 #3076 | `-m` with `-U` shows too many matches | multiline | fixed in the multi line search only; upstream moved `-m` to the searcher in every mode (a6e0be3), which is where #3593, R16-1 and R16-2 came from, so line mode keeps 14.1.1's |
 | #3180 | `-U` with `-r` panics | multiline | todo |
 | #1983 #3364 | `--json` emits one match per multiline match block | multiline | todo |
 | #3503 | multi-line match discovery gives up past `MAX_LOOK_AHEAD` | multiline | todo |
@@ -163,6 +163,15 @@ requests go to other projects only once grepper and NVOL are finished (decided 2
 |---|---|---|---|
 | R16-1 | panic `assertion failed: start <= end` (crates/matcher/src/lib.rs:82), exit 127 | `printf 'a\nc\nfoox\nfoo\na\nc\nfoox\n' > h; rg -n -v -m1 -A3 foo h` (`-A2` and `-A1` do not panic); 25 of 500 random `-v -m -A` searches panicked | never panics (`tests/line_paths.py`) |
 | R16-2 | the slow line path (a regex with `\A` or `\z`) and the fast one disagree under `-m` with context: past the limit the slow path prints lines as context, the fast path as matches | `printf '1\nx\n2\nx\n3\n' > v; rg -n -v -m2 -A2 x v` prints `5:3`, `rg -n -v -m2 -A2 '\Ax' v` prints `5-3`; 222 of 500 random pairs (`\Afoo`/`^foo`, `foo\z`/`foo$`) differ, 0 with 14.1.1 | both paths agree, as in 14.1.1 (`tests/line_paths.py`: 300/300 on seeds 1-3; 16.0.0 gives 187/300 on seed 1) |
+| R16-3 | under `-U`, `-v -m1` prints every inverted line, not the first | `printf 'start
+foo
+bar baz
+qux
+
+foo bar
+end
+' > m; rg -U -v -n -m1 'foo
+bar' m` prints lines 1, 4, 5, 6 and 7; 14.1.1 prints `1:start` | prints `1:start`, as 14.1.1 |
 
 ## NVOL work this port needs
 

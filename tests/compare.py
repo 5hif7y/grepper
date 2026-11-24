@@ -514,6 +514,14 @@ RG_BUGS = [
     # with \r\n; the answer is the input itself, as $0 for a whole line changes nothing
     ("replace keeps the line terminator", "U3100", ["--crlf", "-r", "$0", ".+", "mixed_eol.txt"], "", False,
      (0, b"hello\nworld\r\nalpha beta\r\n")),
+    # -U -m counts matches: rg 14.1.1 counts the blocks of touching matches, so -m1 '^' prints
+    # the whole file; the answers are rg 16.0.0's
+    ("multiline max count, touching matches", "U3076", ["-U", "-m1", "^", "multi.txt"], "", False,
+     (0, b"start\n")),
+    ("multiline max count, lines", "U3076", ["-U", "-m2", "-n", "\\w+\\n", "multi.txt"], "", False,
+     (0, b"1:start\n2:foo\n")),
+    ("multiline max count, count matches", "U3076", ["-U", "-m1", "--count-matches", "\\w+\\n", "multi.txt"], "", False,
+     (0, b"1\n")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

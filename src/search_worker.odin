@@ -51,6 +51,7 @@ worker_new :: proc(h: ^Hi_Args, m: ^Matcher) -> (w: Worker) {
 	if !h.passthru {
 		w.searcher.before_context = h.before_context
 		w.searcher.after_context = h.after_context
+		w.searcher.max_matches = h.max_count
 	}
 	summary_kind: Summary_Kind
 	is_summary := true

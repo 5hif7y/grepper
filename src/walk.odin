@@ -354,6 +354,13 @@ walk_dir :: proc(w: ^Walker, ig: ^Ignore_Node, dir: string, depth: int) {
 			if h.follow { pop(&w.ancestors) }
 			delete(path)
 		} else if is_file {
+			if w.queue != nil {
+				// as in WalkParallel every entry goes on the stack, so that the files of one
+				// large directory spread over the threads (/usr/share/man/man3 holds 9,790
+				// of /usr/share's 26,398 files)
+				dq_push(w.queue, Dir_Job{dir = path, file = true, owned = true, hay = Haystack{path = haystack_path(sh, path)}})
+				continue
+			}
 			w.emit(w, Haystack{path = haystack_path(sh, path)})
 			// searched by now, unless it was collected or sent to another thread
 			if w.cons != nil && !w.collect { delete(path) }

@@ -5,6 +5,7 @@
 //     <index> SUF  <seq>      suffix extraction
 //     <index> OPRE <seq>      prefix extraction after optimize_for_prefix_by_preference
 //     <index> OSUF <seq>      suffix extraction after optimize_for_suffix_by_preference
+//     <index> INNER <seq>     grep-regex 14.1.1's inner literals (Extractor::extract_untagged)
 //     <index> ERR             the pattern does not parse
 //
 // where <seq> is INF or [lit lit ...], a lit E"..." (exact) or I"..." (inexact) with bytes
@@ -12,6 +13,8 @@
 // `<index> HIR <debug>` line. The remaining Seq methods are exercised on PRE and SUF by the
 // MIN, SORT, REV, UIE, XF, XR and INFO lines (see extras). src/hir_literal_test.odin prints
 // the same format.
+
+mod inner;
 
 use std::io::Write;
 
@@ -139,5 +142,6 @@ fn main() {
         writeln!(out, "{} OPRE {}", i, fmt_seq(&opre)).unwrap();
         writeln!(out, "{} OSUF {}", i, fmt_seq(&osuf)).unwrap();
         extras(&mut out, i, &pre, &suf);
+        writeln!(out, "{} INNER {}", i, fmt_seq(&inner::extract_untagged(&hir))).unwrap();
     }
 }

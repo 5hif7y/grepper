@@ -94,7 +94,6 @@ lit_keep_last_bytes :: proc(l: ^Literal, n: int) {
 }
 
 // empty, or a single byte too common to be worth searching for
-@(private="file")
 lit_is_poisonous :: proc(l: Literal) -> bool {
 	return len(l.bytes) == 0 || (len(l.bytes) == 1 && lit_rank(l.bytes[0]) >= 250)
 }

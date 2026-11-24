@@ -193,8 +193,9 @@ build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
 	case .None:
 	}
 	m = matcher_from_hir(hir)
-	// ripgrep gives the matcher no line terminator in multi line mode
-	if h.multiline { m.line_term = false }
+	// ripgrep gives the matcher no line terminator in multi line mode, and so no fast line
+	// regex either
+	if h.multiline { m.line_term = false } else { matcher_add_fast_line(&m, hir) }
 	return m, nil
 }
 

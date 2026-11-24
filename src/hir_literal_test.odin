@@ -163,6 +163,9 @@ test_literal_oracle :: proc(t: ^testing.T) {
 				strings.write_byte(&out, '\n')
 			}
 			oracle_extras(&out, i, pre, suf)
+			fmt.sbprintf(&out, "%d INNER ", i)
+			oracle_fmt_seq(&out, inner_extract_untagged(hir))
+			strings.write_byte(&out, '\n')
 		}
 	}
 	werr := os.write_entire_file(out_path, out.buf[:])

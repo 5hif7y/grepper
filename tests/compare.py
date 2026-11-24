@@ -101,6 +101,15 @@ CASES = [
     ("regex files", ["-l", "a.p", "plain.txt", "crlf.txt", "empty.txt"]),
     ("regex no match", ["zz+q", "plain.txt"]),
     ("regex utf8", ["-n", "caf.", "utf8.txt"]),
+    # the printer with colours and headings, byte for byte (the path colour is per platform)
+    ("color lines", ["--color", "always", "-n", "alpha", "plain.txt"]),
+    ("color heading", ["--color", "always", "--heading", "-n", "alpha", "plain.txt", "crlf.txt"]),
+    ("color count", ["--color", "always", "-c", "alpha", "plain.txt", "crlf.txt"]),
+    ("color files", ["--color", "always", "-l", "alpha", "plain.txt", "crlf.txt"]),
+    ("color with filename", ["--color", "always", "-n", "-H", "al.ha", "plain.txt"]),
+    ("color several matches", ["--color", "always", "-e", "alpha", "-e", "beta", "plain.txt"]),
+    ("color binary", ["--color", "always", "alpha", "binary.bin", "plain.txt"]),
+    ("heading no color", ["--heading", "-n", "alpha", "plain.txt", "crlf.txt"]),
 ]
 
 # recursive cases, run in tests/fixtures/tree; their lines are compared sorted (the walk order

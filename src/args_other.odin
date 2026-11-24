@@ -10,3 +10,6 @@ program_args :: proc() -> []string {
 }
 
 SEP :: "/"
+
+// ripgrep's default path colour on Unix (crates/printer/src/color.rs)
+COLOR_PATH :: "\x1b[0m\x1b[35m"

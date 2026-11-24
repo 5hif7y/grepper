@@ -28,3 +28,6 @@ program_args :: proc() -> []string {
 
 // the separator ripgrep joins walked paths with on Windows (the root stays as given)
 SEP :: "\\"
+
+// ripgrep's default path colour on Windows (crates/printer/src/color.rs)
+COLOR_PATH :: "\x1b[0m\x1b[36m"

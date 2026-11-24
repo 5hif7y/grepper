@@ -4,9 +4,9 @@ package grepper
 import "core:os"
 import "core:strconv"
 
-// ripgrep's default colours (its --colors defaults): path magenta, line number green, match
-// bold red; each span reset before and after, as ripgrep writes them
-COLOR_PATH  :: "\x1b[0m\x1b[35m"
+// ripgrep's default colours (its --colors defaults): line number green, match bold red, the
+// path per platform (COLOR_PATH: magenta on Unix, cyan on Windows); each span reset before
+// and after, as ripgrep writes them
 COLOR_LINE  :: "\x1b[0m\x1b[32m"
 COLOR_MATCH :: "\x1b[0m\x1b[1m\x1b[31m"
 COLOR_RESET :: "\x1b[0m"

@@ -124,12 +124,21 @@ run :: proc(args: []string) -> int {
 	return 1
 }
 
-// literals go to NVOL directly: -F, or patterns without a regex metacharacter (as ripgrep
-// extracts them); the rest to the interim regex engine
+// grep-regex's RegexMatcherBuilder::build_many: plain literals as an alternation of
+// literals, the rest parsed and translated; then the line terminator stripped (outside
+// multi line mode), NUL banned under binary detection, -x or -w wrapped around. Plain
+// literals with nothing around them go to NVOL's literal searchers; everything else to the
+// PikeVM.
 build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
-	// grep-regex's ConfiguredHIR: unless every pattern is a plain literal, they are joined as
-	// (?:p1)|(?:p2)... and parsed by regex-syntax, whose errors ripgrep prints as they are
-	if !rg_is_fixed_strings(h) {
+	hir: ^Hir
+	if rg_is_fixed_strings(h) {
+		if h.boundary == .None && !h.null_data {
+			return matcher_literals(h.patterns[:]), nil
+		}
+		alts: [dynamic]^Hir
+		for p in h.patterns { append(&alts, hir_literal(transmute([]u8)p)) }
+		hir = hir_alternation(alts[:])
+	} else {
 		b: strings.Builder
 		for p, i in h.patterns {
 			if i > 0 { strings.write_byte(&b, '|') }
@@ -152,21 +161,31 @@ build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
 		if h.multiline && h.multiline_dotall { t.flags.dot_matches_new_line = true }
 		if h.crlf { t.flags.crlf = true }
 		if h.no_unicode { t.flags.unicode = false }
-		if _, terr := translate(&t, ast); terr != nil {
+		terr: Trans_Error
+		hir, terr = translate(&t, ast)
+		if terr != nil {
 			return m, hir_error_string(terr.?)
 		}
-	}
-	ignore_case := h.case_mode == .Insensitive
-	plain := !ignore_case
-	if plain && !h.fixed_strings {
-		for p in h.patterns {
-			if has_meta(p) { plain = false }
+		if h.binary_explicit.kind != .None || h.binary_implicit.kind != .None {
+			if e, bad := ban_check(hir, 0).?; bad {
+				return m, suggest_text(suggest_multiline(e))
+			}
+		}
+		if !h.multiline {
+			terms: []u8 = {'\r', '\n'} if h.crlf else ({0} if h.null_data else {'\n'})
+			for term in terms {
+				serr: Maybe(string)
+				hir, serr = strip_from_match(hir, term)
+				if e, bad := serr.?; bad { return m, suggest_text(suggest_multiline(e)) }
+			}
 		}
 	}
-	if plain {
-		return matcher_literals(h.patterns[:]), nil
+	switch h.boundary {
+	case .Line: hir = into_whole_line(hir, h.crlf)
+	case .Word: hir = into_word(hir, !h.no_unicode)
+	case .None:
 	}
-	return matcher_regex(join_patterns(h.patterns[:], h.fixed_strings), ignore_case)
+	return matcher_pike(hir), nil
 }
 
 // regex_syntax::escape: every meta character preceded by a backslash

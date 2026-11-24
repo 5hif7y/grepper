@@ -1,34 +1,35 @@
 // Copyright (c) 2026 Matías Alemán (5hif7y). SPDX-License-Identifier: MIT
 package grepper
 
-import "core:text/regex"
 import nvol "nvol:odin"
 
-// What a search looks for. Literals go to NVOL's kernels: one needle to memmem (memchr's
-// Finder in ripgrep), several to Teddy (aho-corasick's packed searcher), with a memmem per
-// needle when Teddy cannot take them (the cases aho-corasick also refuses).
-Matcher_Kind :: enum { Empty, Literal, Literals, Regex }
+// What a search looks for. Plain literals go to NVOL's kernels: one needle to memmem
+// (memchr's Finder in ripgrep), several to Teddy (aho-corasick's packed searcher), with a
+// memmem per needle when Teddy cannot take them (the cases aho-corasick also refuses).
+// Anything else is a regex: the HIR compiled to a Thompson NFA, run by the PikeVM.
+Matcher_Kind :: enum { Empty, Literal, Literals, Pike }
 
 Matcher :: struct {
-	kind:    Matcher_Kind,
-	needles: []string,
-	finders: []nvol.Memmem_Finder,
-	teddy:   nvol.Teddy,
+	kind:     Matcher_Kind,
+	needles:  []string,
+	finders:  []nvol.Memmem_Finder,
+	teddy:    nvol.Teddy,
 	teddy_ok: bool,
-	rx:      ^Regex_Matcher,
+	nfa:      ^Rx_NFA,
+	cache:    Pike_Cache,
+	slots:    []int,
 }
 
-// a worker's own copy: the memmem finders and the regex capture change while searching
+// a worker's own copy: the memmem finders and the PikeVM's scratch change while searching
 matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 	c = m
 	if m.finders != nil {
 		c.finders = make([]nvol.Memmem_Finder, len(m.finders))
 		copy(c.finders, m.finders)
 	}
-	if m.rx != nil {
-		c.rx = new(Regex_Matcher)
-		c.rx^ = m.rx^
-		c.rx.capture = regex.preallocate_capture()
+	if m.nfa != nil {
+		c.cache = pike_cache_new(m.nfa)
+		c.slots = make([]int, m.nfa.slots)
 	}
 	return
 }
@@ -54,8 +55,19 @@ matcher_literals :: proc(needles: []string) -> (m: Matcher) {
 	return
 }
 
-// grep-matcher's Matcher, as the searcher and printers call it. The interim engines never
-// match across a line terminator, so a candidate line is always confirmed.
+matcher_pike :: proc(h: ^Hir) -> (m: Matcher) {
+	m.kind = .Pike
+	m.nfa = new(Rx_NFA)
+	m.nfa^ = rx_compile(h)
+	rx_finish(m.nfa)
+	m.cache = pike_cache_new(m.nfa)
+	m.slots = make([]int, m.nfa.slots)
+	return
+}
+
+// grep-matcher's Matcher, as the searcher and printers call it. Lines never contain a match
+// across a line terminator (strip_from_match removed it from the regex), so a candidate line
+// is always confirmed.
 matcher_find_at :: proc(m: ^Matcher, hay: []u8, at: int) -> (r: Range, ok: bool) {
 	s, e := find(m, hay, at, len(hay)) or_return
 	return {s, e}, true
@@ -66,13 +78,24 @@ matcher_is_match :: proc(m: ^Matcher, line: []u8) -> bool {
 	return ok
 }
 
+// ripgrep's shortest_match: the end of a match
 matcher_find_candidate_line :: proc(m: ^Matcher, buf: []u8) -> (at: int, confirmed: bool, ok: bool) {
-	s, _ := find(m, buf, 0, len(buf)) or_return
-	return s, true, true
+	_, e := find(m, buf, 0, len(buf)) or_return
+	return e, true, true
 }
 
-// The leftmost match in hay[start:end): its bounds in hay. Among needles starting at the same
-// byte, the first given (leftmost-first, as ripgrep).
+// the capture group i of the last Pike search (-1 when it did not take part)
+matcher_group :: proc(m: ^Matcher, i: int) -> (r: Range, ok: bool) {
+	if m.kind != .Pike {
+		if i != 0 { return }
+		return {m.slots[0], m.slots[1]}, m.slots != nil
+	}
+	if 2 * i + 1 >= len(m.slots) || m.slots[2 * i] < 0 || m.slots[2 * i + 1] < 0 { return }
+	return {m.slots[2 * i], m.slots[2 * i + 1]}, true
+}
+
+// The leftmost-first match in hay[start:end): its bounds in hay. Among needles starting at
+// the same byte, the first given.
 find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 	switch m.kind {
 	case .Empty:
@@ -93,8 +116,9 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 			}
 		}
 		return s, e, best >= 0
-	case .Regex:
-		return find_regex(m.rx, hay, start, end)
+	case .Pike:
+		if !pike_search(m.nfa, &m.cache, hay[:end], start, end, false, m.slots) { return }
+		return m.slots[0], m.slots[1], true
 	}
 	return
 }

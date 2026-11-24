@@ -92,12 +92,7 @@ unsupported :: proc(low: ^Low_Args) -> string {
 	if low.search_zip { return "-z/--search-zip" }
 	if low.pre != "" { return "--pre" }
 	if low.engine != .Default { return "-P/--pcre2 and --engine" }
-	if low.boundary != .None { return "-w/-x" }
 	if low.multiline { return "-U/--multiline" }
-	if low.case_mode == .Smart { return "-S/--smart-case" }
-	if low.no_unicode { return "--no-unicode" }
-	if low.crlf { return "--crlf" }
-	if low.null_data { return "--null-data" }
 	if low.hyperlink_format != "" { return "--hyperlink-format" }
 	if low.replace != nil { return "-r/--replace" }
 	if low.max_columns_preview { return "--max-columns-preview" }

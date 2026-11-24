@@ -132,6 +132,65 @@ Walker :: struct {
 	collect: bool,
 	ancestors: [dynamic]string,   // with -L: the directories being walked, for loop detection
 	parents_cache: map[string]^Ignore_Node,   // the previous directory root's ancestors
+	queue:   ^Dir_Queue,          // a parallel walk: subdirectories are queued, not recursed
+}
+
+// The ignore crate's WalkParallel, in its effect: several threads take directories from a
+// shared stack, list and filter them, queue their subdirectories and send their files to the
+// searchers. The walk ends when the stack is empty and no thread holds a directory. As in
+// ripgrep, the order files come out in is then not fixed; -j1, --sort, and (here) -L and
+// --one-file-system, whose loop and device checks follow one path at a time, walk alone.
+Dir_Job :: struct {
+	ig:    ^Ignore_Node,
+	dir:   string,
+	depth: int,
+}
+
+Dir_Queue :: struct {
+	mu:          sync.Mutex,
+	cond:        sync.Cond,
+	jobs:        [dynamic]Dir_Job,
+	outstanding: int,     // queued, plus taken and not finished
+}
+
+dq_push :: proc(q: ^Dir_Queue, job: Dir_Job) {
+	sync.lock(&q.mu)
+	append(&q.jobs, job)
+	q.outstanding += 1
+	sync.unlock(&q.mu)
+	sync.cond_signal(&q.cond)
+}
+
+// the next directory, or none once the walk is over
+dq_pop :: proc(q: ^Dir_Queue) -> (job: Dir_Job, ok: bool) {
+	sync.lock(&q.mu)
+	defer sync.unlock(&q.mu)
+	for len(q.jobs) == 0 {
+		if q.outstanding == 0 { return }
+		sync.cond_wait(&q.cond, &q.mu)
+	}
+	return pop(&q.jobs), true
+}
+
+dq_finish :: proc(q: ^Dir_Queue) {
+	sync.lock(&q.mu)
+	q.outstanding -= 1
+	last := q.outstanding == 0
+	sync.unlock(&q.mu)
+	if last { sync.cond_broadcast(&q.cond) }
+}
+
+walk_thread :: proc(w: ^Walker) {
+	for {
+		job, ok := dq_pop(w.queue)
+		if !ok { break }
+		// job.dir is not freed: the directory's Ignore_Node keeps it as its dir, and the
+		// subdirectories queued under that node strip their paths against it after this
+		// call returns (the nodes themselves are never freed either)
+		walk_dir(w, job.ig, job.dir, job.depth)
+		free_all(context.temp_allocator)
+		dq_finish(w.queue)
+	}
 }
 
 walker_emit :: proc(w: ^Walker, hay: Haystack) {
@@ -229,6 +288,10 @@ walk_dir :: proc(w: ^Walker, ig: ^Ignore_Node, dir: string, depth: int) {
 				delete(path)
 				continue
 			}
+			if w.queue != nil {
+				dq_push(w.queue, Dir_Job{ig = node, dir = path, depth = depth + 1})
+				continue
+			}
 			if h.follow { append(&w.ancestors, canonical(path)) }
 			walk_dir(w, node, path, depth + 1)
 			if h.follow { pop(&w.ancestors) }
@@ -296,7 +359,11 @@ walk_roots :: proc(w: ^Walker) {
 				clear(&w.ancestors)
 				append(&w.ancestors, canonical(path))
 			}
-			walk_dir(w, ig, path, 0)
+			if w.queue != nil {
+				dq_push(w.queue, Dir_Job{ig = ig, dir = strings.clone(path), depth = 0})
+			} else {
+				walk_dir(w, ig, path, 0)
+			}
 		} else {
 			clear(&w.parents_cache)
 			w.emit(w, Haystack{path = path, explicit = true})
@@ -406,7 +473,27 @@ run_walk :: proc(h: ^Hi_Args, m: ^Matcher, files_mode: bool) -> bool {
 	if s, has := h.sort.?; has && !(s.kind == .Path && !s.reverse) {
 		w.collect = true
 	}
-	walk_roots(&w)
+	parallel := n > 1 || (files_mode && h.threads > 1)
+	parallel = parallel && !w.collect && h.sort == nil && !h.follow && !h.one_file_system
+	if parallel {
+		// the roots are queued in order, then walked by h.threads threads
+		q := new(Dir_Queue)
+		w.queue = q
+		walk_roots(&w)
+		walkers := make([]^thread.Thread, h.threads)
+		copies := make([]Walker, h.threads)
+		for i in 0 ..< h.threads {
+			copies[i] = w
+			copies[i].parents_cache = {}
+			walkers[i] = thread.create_and_start_with_poly_data(&copies[i], walk_thread)
+		}
+		for t in walkers {
+			thread.join(t)
+			thread.destroy(t)
+		}
+	} else {
+		walk_roots(&w)
+	}
 	if w.collect {
 		sort_haystacks(w.sorted[:], h.sort.?)
 		for hay in w.sorted { chan.send(sh.jobs, hay) }

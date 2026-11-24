@@ -619,6 +619,21 @@ TREE5 = {
     "a/b/c/other": b"hit\n",
 }
 
+# a wide tree for the parallel walk: the rules hold a '/', so each entry is stripped against
+# the directory of every node above it, which a parallel walk must keep alive after the
+# thread that listed that directory has moved on
+TREE6 = {".gitignore": b"d*/s1/skip.txt\n/d1*/\n"}
+for _i in range(60):
+    TREE6[f"d{_i}/.gitignore"] = b"s2/keep.txt\n"
+    for _j in range(4):
+        for _f in ("keep.txt", "skip.txt"):
+            TREE6[f"d{_i}/s{_j}/{_f}"] = b"alpha\n"
+
+TREE6_CASES = [
+    ("wide tree, files", ["--files"]),
+    ("wide tree, search", ["-c", "alpha"]),
+]
+
 # parent-directory rules that name directories below the search root (PARITY B3)
 TREE4 = {
     ".gitignore": b"docs/a/b/draft*\n",
@@ -665,6 +680,7 @@ def write_fixtures():
     write_tree("tree3", TREE3)
     write_tree("tree4", TREE4)
     write_tree("tree5", TREE5)
+    write_tree("tree6", TREE6)
     with open(os.path.join(FIX, "extra.ignore"), "wb") as f:
         f.write(b"c.txt\n*.py\n")
     if os.name == "nt":
@@ -711,6 +727,7 @@ def main():
     cases += [(n, c, tree2, True, None) for n, c in TREE2_CASES]
     cases += [(n, c, tree2, False, None) for n, c in SORT_CASES]
     cases += [(n, c, tree3, True, None) for n, c in TREE3_CASES]
+    cases += [(n, c, os.path.join(FIX, "tree6"), True, None) for n, c in TREE6_CASES]
     cases = [(n, c, cwd, sort, stdin, None) for n, c, cwd, sort, stdin in cases]
     cases += [(n, c, FIX, False, i, None) for n, c, i in STDIN_CASES]
     cases += [(n, c, FIX, False, None, cfg) for n, c, cfg in CONFIG_CASES]
@@ -746,6 +763,27 @@ def main():
             print(f"  rg      rc={r[0]} {r[1][:400]!r}")
     total = sum(1 for n, *_ in cases if a.k in n)
     print(f"{total - bad}/{total} cases match rg")
+    # the walked cases again with grepper walking and searching on 4 threads: the file order
+    # is then not fixed (as in ripgrep), so the lines are compared sorted
+    par_bad, par_total = 0, 0
+    for name, args, cwd, sort, stdin, cfg in cases:
+        if not sort or stdin is not None or cfg is not None or a.k not in name:
+            continue
+        par_total += 1
+        g = run(a.grepper, args, ["-j4"], cwd)
+        r = run(a.rg, args, ["-j1"], cwd)
+        # -0 ends paths with NUL instead of a newline
+        split = (lambda b: sorted(b.split(b"\0"))) if "-0" in args else (lambda b: sorted(b.splitlines(True)))
+        g = g[0], split(normalize(g[1]))
+        r = r[0], split(normalize(r[1]))
+        if g != r:
+            par_bad += 1
+            print(f"DIFF -j4 {name}: {args}")
+            print(f"  grepper rc={g[0]} {g[1][:400]!r}")
+            print(f"  rg      rc={r[0]} {r[1][:400]!r}")
+    if par_total:
+        print(f"{par_total - par_bad}/{par_total} walked cases match rg with -j4")
+    bad += par_bad
     fixed_bad, fixed_total = 0, 0
     for name, bug, args, sub, sort, expect in RG_BUGS:
         if a.k not in name:

@@ -328,7 +328,6 @@ TREE_CASES = [
     ("walk --hidden --no-ignore", ["-F", "-l", "--hidden", "--no-ignore", "alpha"]),
     ("walk subdir", ["-F", "-l", "alpha", "src"]),
     ("walk explicit ignored file", ["-F", "alpha", "drop.log"]),
-    ("walk two roots", ["-F", "-l", "alpha", "src", "docs"]),
     ("walk regex", ["-n", "^int [a-z]+;$"]),
     ("walk regex -l", ["-l", "al.ha (in|kept)"]),
     ("walk context heading", ["-C", "1", "alpha"]),
@@ -361,6 +360,12 @@ RG_BUGS = [
      ("rg", [["-o", "\\p{sc=Greek}+", "words.txt"]])),
     ("not-equal property in a class", "B1", ["-c", "[\\p{sc!=Latin}&&\\pL]", "words.txt"], "", False,
      ("rg", [["-c", "[\\P{sc=Latin}&&\\pL]", "words.txt"]])),
+    # the parent .gitignore has docs/**/draft*: rg 14.1.1 matches docs' paths against src's
+    # absolute base when src is walked first, and prints docs/a/b/draft1.md
+    ("walk two roots", "B2", ["-F", "-l", "alpha", "src", "docs"], "tree", True,
+     ("rg", [["-F", "-l", "alpha", "src"], ["-F", "-l", "alpha", "docs"]])),
+    ("walk two roots, one deeper", "B2", ["-F", "-l", "alpha", "src/deep", "docs"], "tree", True,
+     ("rg", [["-F", "-l", "alpha", "src/deep"], ["-F", "-l", "alpha", "docs"]])),
 ]
 
 

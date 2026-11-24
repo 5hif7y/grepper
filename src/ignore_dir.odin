@@ -150,8 +150,13 @@ resolve_git_commondir :: proc(dir: string, git_is_file: bool) -> (git_dir: strin
 
 // add_parents: the root's absolute ancestors, top down, each an absolute parent. ripgrep
 // caches these nodes by path for as long as they are alive; walking one thread, the nodes
-// alive are those of the previous directory root, so an ancestor shared with it is reused,
-// absolute_base and all (`cache`, replaced by this root's chain).
+// alive are those of the previous directory root, so an ancestor shared with it is reused
+// (`cache`, replaced by this root's chain).
+//
+// Fix over 14.1.1 (grepper's PARITY B2, ripgrep 15.2.0's): a reused ancestor kept the
+// absolute_base of the root that built it, and the nodes below this root inherit it, so the
+// parents' ignore rules were matched against the other root's paths. The node returned
+// carries this root's absolute_base, as ripgrep's Ignore handle now does.
 ignore_add_parents :: proc(root: ^Ignore_Node, path: string, cache: ^map[string]^Ignore_Node) -> ^Ignore_Node {
 	o := root.sh.opts
 	if !o.parents && !o.git_ignore && !o.git_exclude && !o.git_global { return root }
@@ -184,6 +189,12 @@ ignore_add_parents :: proc(root: ^Ignore_Node, path: string, cache: ^map[string]
 	}
 	delete(cache^)
 	cache^ = chain
+	if ig != root && ig.absolute_base != abs {
+		own := new(Ignore_Node)
+		own^ = ig^
+		own.absolute_base = abs
+		ig = own
+	}
 	return ig
 }
 

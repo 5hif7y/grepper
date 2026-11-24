@@ -110,6 +110,21 @@ Out :: struct {
 	count_from:    int,          // len(buf) at reset_count
 	total:         int,          // bytes written before the buffer was last cleared
 	color:         bool,
+	// stdout written as the buffer fills, not per file: ripgrep searching on one thread
+	// prints through a block-buffered stdout. Holding a whole file's output instead cost a
+	// 524 MiB file with 901,441 matching lines 116,228 page faults and 11 mremaps (rg: 971)
+	stream:        bool,
+}
+
+OUT_STREAM_AT :: 1 << 16
+
+// the buffer to stdout, as if it were still held: count_from goes back by what left, so
+// out_count still measures from reset_count (it can then be negative), and total grows
+out_flush :: proc(o: ^Out) {
+	write_stdout(o.buf[:])
+	o.total += len(o.buf)
+	o.count_from -= len(o.buf)
+	clear(&o.buf)
 }
 
 out_count :: #force_inline proc(o: ^Out) -> int { return len(o.buf) - o.count_from }
@@ -122,8 +137,14 @@ out_clear :: proc(o: ^Out) {
 	o.count_from = 0
 }
 
-out_write :: #force_inline proc(o: ^Out, b: []u8) { append(&o.buf, ..b) }
-out_str :: #force_inline proc(o: ^Out, s: string) { append(&o.buf, s) }
+out_write :: #force_inline proc(o: ^Out, b: []u8) {
+	append(&o.buf, ..b)
+	if o.stream && len(o.buf) >= OUT_STREAM_AT { out_flush(o) }
+}
+out_str :: #force_inline proc(o: ^Out, s: string) {
+	append(&o.buf, s)
+	if o.stream && len(o.buf) >= OUT_STREAM_AT { out_flush(o) }
+}
 
 out_set_color :: proc(o: ^Out, spec: Color_Spec) {
 	if o.color { write_set_color(&o.buf, spec) }

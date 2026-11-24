@@ -50,7 +50,9 @@ write_stdout :: proc(b: []u8) {
 search_worker_thread :: proc(sh: ^Shared) {
 	w := worker_new(sh.h, sh.m)
 	out := worker_out(&w)
-	reserve(&out.buf, 1 << 16)
+	reserve(&out.buf, OUT_STREAM_AT)
+	// one searching thread: nothing else writes stdout while a file is searched
+	out.stream = sh.h.threads == 1
 	for {
 		hay, ok := chan.recv(sh.jobs)
 		if !ok { break }

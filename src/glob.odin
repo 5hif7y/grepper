@@ -275,11 +275,20 @@ Glob_Matcher :: struct {
 	strategy:  Glob_Strategy,
 	lit:       string,
 	component: bool,
-	// scratch for the NFA simulation
-	cur, nxt:  [dynamic]int,
-	mark:      []int,
-	gen:       int,
 }
+
+// The NFA simulation's scratch, one per thread: a matcher is shared by every thread that
+// walks directories. A state's mark holds the generation it was last added in; generations
+// only grow, so marks left by another matcher are always older.
+@(private="file")
+Glob_Scratch :: struct {
+	cur, nxt: [dynamic]int,
+	mark:     [dynamic]int,
+	gen:      int,
+}
+
+@(private="file", thread_local)
+glob_scratch: Glob_Scratch
 
 @(private="file")
 nfa_add :: proc(m: ^Glob_Matcher, s: NFA_State) -> int {
@@ -451,7 +460,6 @@ glob_compile :: proc(glob: string, opts: Glob_Options) -> (m: Glob_Matcher, err:
 		m.start = build_seq(&m, tokens[:], opts, match_state)
 	}
 	glob_choose_strategy(&m, tokens[:], opts)
-	m.mark = make([]int, len(m.states))
 	return
 }
 
@@ -616,32 +624,34 @@ glob_is_match :: proc(m: ^Glob_Matcher, path: []u8) -> bool {
 // the regex's NFA, simulated over the path's bytes (^...$); the scratch lists live in the
 // matcher, which only the walking thread uses
 nfa_is_match :: proc(m: ^Glob_Matcher, path: []u8) -> bool {
-	add :: proc(m: ^Glob_Matcher, list: ^[dynamic]int, s: int) {
-		if m.mark[s] == m.gen { return }
-		m.mark[s] = m.gen
+	add :: proc(m: ^Glob_Matcher, sc: ^Glob_Scratch, list: ^[dynamic]int, s: int) {
+		if sc.mark[s] == sc.gen { return }
+		sc.mark[s] = sc.gen
 		if m.states[s].kind == .Split {
-			add(m, list, m.states[s].out)
-			add(m, list, m.states[s].out1)
+			add(m, sc, list, m.states[s].out)
+			add(m, sc, list, m.states[s].out1)
 			return
 		}
 		append(list, s)
 	}
-	clear(&m.cur)
-	m.gen += 1
-	add(m, &m.cur, m.start)
+	sc := &glob_scratch
+	if len(sc.mark) < len(m.states) { resize(&sc.mark, len(m.states)) }
+	clear(&sc.cur)
+	sc.gen += 1
+	add(m, sc, &sc.cur, m.start)
 	for b in path {
-		m.gen += 1
-		clear(&m.nxt)
-		for s in m.cur {
+		sc.gen += 1
+		clear(&sc.nxt)
+		for s in sc.cur {
 			st := &m.states[s]
 			if st.kind == .Byte && bs_has(st.set, b) {
-				add(m, &m.nxt, st.out)
+				add(m, sc, &sc.nxt, st.out)
 			}
 		}
-		m.cur, m.nxt = m.nxt, m.cur
-		if len(m.cur) == 0 { return false }
+		sc.cur, sc.nxt = sc.nxt, sc.cur
+		if len(sc.cur) == 0 { return false }
 	}
-	for s in m.cur {
+	for s in sc.cur {
 		if m.states[s].kind == .Match { return true }
 	}
 	return false

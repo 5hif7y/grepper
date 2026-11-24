@@ -234,12 +234,12 @@ CASES = [
     ("json", ["--json", "alpha", "plain.txt", "crlf.txt"]),
     ("json context", ["--json", "-C", "1", "hit", "ctx.txt"]),
     ("json invert context", ["--json", "-v", "-C", "1", "line", "ctx.txt"]),
-    ("json non utf8", ["--json", "-a", "alpha", "binary.bin", "utf8.txt"]),
+    # both files match: a file without one is left out of 14.1.1's summary (RG_BUGS U3178)
+    ("json non utf8", ["--json", "-a", "alpha|café", "binary.bin", "utf8.txt"]),
     ("json binary", ["--json", "alpha", "binary.bin"]),
     ("json max count", ["--json", "-m", "1", "alpha", "plain.txt"]),
     # the control bytes themselves: the interim regex engine has no \x escapes
     ("json escapes", ["--json", "-a", "\x01|\t|\"", "esc.txt"]),
-    ("json no match", ["--json", "zzz", "plain.txt"]),
     ("json quiet", ["--json", "-q", "alpha", "plain.txt"]),
     ("stats", ["--stats", "alpha", "plain.txt", "crlf.txt"]),
     ("stats count", ["--stats", "-c", "alpha", "plain.txt", "crlf.txt"]),
@@ -421,6 +421,12 @@ RG_BUGS = [
     # the answer is what a memory map gives, the bytes up to the end of the last line looked at
     ("stats bytes searched, stopped early", "U2944", ["--no-mmap", "-m1", "--stats", "-c", "alpha", "plain.txt"], "", False,
      ("rg", [["--mmap", "-m1", "--stats", "-c", "alpha", "plain.txt"]])),
+    # --json's summary counts every search: rg 14.1.1 leaves out those without a match (here
+    # both, so "searches":0 and "bytes_searched":0); the answer is rg 16.0.0's, timings zeroed
+    ("json summary of searches without a match", "U3178", ["--json", "zzz", "empty.txt", "plain.txt"], "", False,
+     (1, b'{"data":{"elapsed_total":{"human":"0s","nanos":0,"secs":0},"stats":{"bytes_printed":0,"bytes_searched":51,'
+         b'"elapsed":{"human":"0s","nanos":0,"secs":0},"matched_lines":0,"matches":0,"searches":2,"searches_with_match":0}},'
+         b'"type":"summary"}\n')),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

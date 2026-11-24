@@ -130,7 +130,7 @@ recorded here as such.
 | #3100 | `-r` drops line terminators | replace | todo, with `-r` |
 | #3108 | `-q --files-without-match` inverts the exit code | exit codes | fixed |
 | #3173 | ancestor ignore filter wrong for whitelisted hidden files | ignore | todo |
-| #3178 | `--json` summary statistics wrong | printer | todo |
+| #3178 | `--json` summary statistics wrong | printer | fixed |
 | #3179 | absolute paths with a global gitignore | ignore | todo |
 | #3593 | `-v -m N -A k` prints the rest of the input as matches | searcher | does not apply: 14.1.1 prints the issue's case right (`1:a 2:b 3-foo`); the bug came with 15.x. `tests/line_paths.py` holds grepper to the behaviour the issue expects |
 | #3581 #1764 | `-g !DIRNAME/` does not match when the working directory is `DIRNAME` | globs | todo |

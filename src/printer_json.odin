@@ -128,12 +128,14 @@ json_begin :: proc(s: ^JSON_Sink, searcher: ^Searcher) -> bool {
 }
 
 json_finish :: proc(s: ^JSON_Sink, searcher: ^Searcher, byte_count: int, binary_byte_offset: Maybe(int)) {
-	if !s.begin_printed { return }
 	s.stats.elapsed_ns += i64(time.tick_since(s.start))
 	s.stats.searches += 1
 	if s.match_count > 0 { s.stats.searches_with_match += 1 }
 	s.stats.bytes_searched += u64(byte_count)
 	s.stats.bytes_printed += u64(out_count(&s.p.out))
+	// a search that printed nothing still counts in the summary (fix over 14.1.1, ripgrep
+	// 15.0.0's #3178: 14.1.1 returned before tallying it)
+	if !s.begin_printed { return }
 	o := &s.p.out
 	out_str(o, `{"type":"end","data":{"path":`)
 	json_data_text(o, s.path)

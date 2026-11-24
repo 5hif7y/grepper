@@ -4,3 +4,4 @@
 *.o
 *.obj
 /build/
+/tests/fixtures/

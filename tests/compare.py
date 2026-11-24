@@ -522,6 +522,10 @@ RG_BUGS = [
      (0, b"1:start\n2:foo\n")),
     ("multiline max count, count matches", "U3076", ["-U", "-m1", "--count-matches", "\\w+\\n", "multi.txt"], "", False,
      (0, b"1\n")),
+    # --json splits a multi line block at the line ends no match crosses: rg 14.1.1 writes one
+    # message for two matches; the answer is rg 16.0.0's
+    ("multiline json, two matches in a block", "U1983", ["-U", "--json", "t\\nfoo|z\\nqux", "multi.txt"], "", False,
+     (0, b'{"type":"begin","data":{"path":{"text":"multi.txt"}}}\n{"type":"match","data":{"path":{"text":"multi.txt"},"lines":{"text":"start\\nfoo\\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"t\\nfoo"},"start":4,"end":9}]}}\n{"type":"match","data":{"path":{"text":"multi.txt"},"lines":{"text":"bar baz\\nqux\\n"},"line_number":3,"absolute_offset":10,"submatches":[{"match":{"text":"z\\nqux"},"start":6,"end":11}]}}\n{"type":"end","data":{"path":{"text":"multi.txt"},"binary_offset":null,"stats":{"elapsed":{"secs":0,"nanos":0,"human":"0s"},"searches":1,"searches_with_match":1,"bytes_searched":35,"bytes_printed":424,"matched_lines":4,"matches":2}}}\n{"data":{"elapsed_total":{"human":"0s","nanos":0,"secs":0},"stats":{"bytes_printed":424,"bytes_searched":35,"elapsed":{"human":"0s","nanos":0,"secs":0},"matched_lines":4,"matches":2,"searches":1,"searches_with_match":1}},"type":"summary"}\n')),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

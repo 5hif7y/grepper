@@ -68,8 +68,39 @@ json_matched :: proc(s: ^JSON_Sink, searcher: ^Searcher, mat: ^Sink_Match) -> bo
 	json_record_matches(s, searcher, mat.buffer, mat.range_in_buffer)
 	s.stats.matches += u64(len(s.p.matches))
 	s.stats.matched_lines += u64(count_lines_of(mat.bytes, searcher.line_term))
-	json_write_lines(s, "match", mat.bytes, mat.line_number, mat.absolute_byte_offset, s.p.matches[:])
+	json_write_match_messages(s, searcher, mat)
 	return !json_should_quit(s)
+}
+
+// One "match" message per run of lines that no submatch crosses: a multi line block of
+// several matches is split at the line ends between them, each message with its own lines,
+// line number, offset and submatches. Fix over 14.1.1 (ripgrep 16.0.0's #1983/#3364), which
+// wrote the whole block as one message. A single line is one message, as before.
+json_write_match_messages :: proc(s: ^JSON_Sink, searcher: ^Searcher, mat: ^Sink_Match) {
+	all := s.p.matches[:]
+	rest := 0           // the first submatch not yet written
+	start, end := 0, 0
+	line_number := mat.line_number
+	st := Line_Step{searcher.line_term, 0, len(mat.bytes)}
+	line_index := 0
+	for {
+		line := line_step_next(&st, mat.bytes) or_break
+		end += line.end - line.start
+		k := rest
+		for k < len(all) && all[k].start < end { k += 1 }
+		if k > rest && all[k - 1].end > end {
+			// a submatch runs into the next line: keep going
+			line_index += 1
+			continue
+		}
+		cur := make([]Range, k - rest, context.temp_allocator)
+		for m, j in all[rest:k] { cur[j] = {m.start - start, m.end - start} }
+		json_write_lines(s, "match", mat.bytes[start:end], line_number, mat.absolute_byte_offset + start, cur)
+		rest = k
+		start = end
+		if n, ok := mat.line_number.?; ok { line_number = n + line_index + 1 }
+		line_index += 1
+	}
 }
 
 json_context :: proc(s: ^JSON_Sink, searcher: ^Searcher, ctx: ^Sink_Context) -> bool {

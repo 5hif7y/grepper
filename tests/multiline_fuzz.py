@@ -4,9 +4,10 @@
 
 Random small files (LF and CRLF lines) searched with -U, a pattern from a list of multi line
 and single line regexes, and one set of flags; stdout, exit code and stderr must equal rg
-14.1.1's. A --json search without a match is left out: rg 14.1.1 leaves it out of its summary
-statistics, which grepper counts (RG_BUGS U3178 in compare.py). Neither is -m: grepper counts
-it in matches, as rg 16.0.0 does, and rg 14.1.1 in blocks of touching matches (U3076).
+14.1.1's. Two flags are left out, where grepper takes ripgrep's later fixes (RG_BUGS in
+compare.py): --json, which rg 14.1.1 writes as one message per multi line block (U1983) and
+whose summary leaves out searches without a match (U3178); and -m, which grepper counts in
+matches, as rg 16.0.0 does, and rg 14.1.1 in blocks of touching matches (U3076).
 
 usage: python tests/multiline_fuzz.py [--seed N] [-n N] [--grepper PATH] [--rg PATH]
 """
@@ -62,7 +63,9 @@ def main():
             for exe in (a.rg, a.grepper):
                 r = subprocess.run([exe, *args], capture_output=True, stdin=subprocess.DEVNULL)
                 outs.append((r.returncode, norm(r.stdout), r.stderr.replace(b"grepper:", b"rg:")))
-            if "--json" in opts and outs[0][0] == 1:
+            if "--json" in opts:
+                # grepper splits a multi line block into one message per run of lines (rg
+                # 16.0.0's fix, RG_BUGS U1983) and counts searches without a match (U3178)
                 continue
             if any(o.startswith("-m") for o in opts):
                 # -U -m counts matches in grepper, blocks in rg 14.1.1 (RG_BUGS U3076)

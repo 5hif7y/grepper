@@ -18,6 +18,7 @@ Matcher :: struct {
 	nfa:      ^Rx_NFA,
 	cache:    Pike_Cache,
 	slots:    []int,
+	dfa:      Lazy_Dfa,
 }
 
 // a worker's own copy: the memmem finders and the PikeVM's scratch change while searching
@@ -30,6 +31,7 @@ matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 	if m.nfa != nil {
 		c.cache = pike_cache_new(m.nfa)
 		c.slots = make([]int, m.nfa.slots)
+		c.dfa = dfa_new(m.nfa)
 	}
 	return
 }
@@ -62,7 +64,22 @@ matcher_pike :: proc(h: ^Hir) -> (m: Matcher) {
 	rx_finish(m.nfa)
 	m.cache = pike_cache_new(m.nfa)
 	m.slots = make([]int, m.nfa.slots)
+	m.dfa = dfa_new(m.nfa)
 	return
+}
+
+// whether a match ends in hay[start:], and where the first does: the lazy DFA, or the
+// PikeVM when the DFA gives up
+@(private="file")
+earliest :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
+	at, r := dfa_find_earliest(&m.dfa, hay, start, len(hay))
+	switch r {
+	case .Match: return at, true
+	case .No_Match: return 0, false
+	case .Quit:
+	}
+	if !pike_search(m.nfa, &m.cache, hay, start, len(hay), false, m.slots) { return }
+	return m.slots[1], true
 }
 
 // grep-matcher's Matcher, as the searcher and printers call it. Lines never contain a match
@@ -74,12 +91,22 @@ matcher_find_at :: proc(m: ^Matcher, hay: []u8, at: int) -> (r: Range, ok: bool)
 }
 
 matcher_is_match :: proc(m: ^Matcher, line: []u8) -> bool {
+	if m.kind == .Pike {
+		_, ok := earliest(m, line, 0)
+		return ok
+	}
 	_, _, ok := find(m, line, 0, len(line))
 	return ok
 }
 
 // ripgrep's shortest_match: the end of a match
+// (the DFA's end is the earliest end, not the leftmost-first match's; both lie on the
+// first line holding a match, since no match crosses a line terminator)
 matcher_find_candidate_line :: proc(m: ^Matcher, buf: []u8) -> (at: int, confirmed: bool, ok: bool) {
+	if m.kind == .Pike {
+		e := earliest(m, buf, 0) or_return
+		return e, true, true
+	}
 	_, e := find(m, buf, 0, len(buf)) or_return
 	return e, true, true
 }

@@ -41,6 +41,12 @@ Lazy_Dfa :: struct {
 	trans:        [dynamic]i32,   // DFA_STRIDE entries per state, encoded as above
 	index:        map[string]i32,
 	has_uni_word: bool,
+	// the context each byte leaves behind, and the one before the input: only the
+	// distinctions the regex's look-around reads (no word boundary, no Word context), so
+	// that bytes the regex treats alike lead to one state, as regex-automata's start and
+	// look-behind handling only tracks what the NFA's look set needs
+	ctx_of:       [256]Dfa_Ctx,
+	start_ctx:    Dfa_Ctx,
 	// scratch
 	mark:         []u32,
 	gen:          u32,
@@ -58,14 +64,38 @@ dfa_new :: proc(n: ^Rx_NFA) -> (d: Lazy_Dfa) {
 	for &x in d.start_ids { x = -1 }
 	d.mark = make([]u32, len(n.states))
 	d.budget = 4096
+	need_start, need_lf, need_cr, need_word := false, false, false, false
 	for s in n.states {
 		if s.kind == .Look {
 			#partial switch s.look {
 			case .Word_Unicode, .Word_Unicode_Negate, .Word_Start_Unicode, .Word_End_Unicode, .Word_Start_Half_Unicode, .Word_End_Half_Unicode:
 				d.has_uni_word = true
+				need_word = true
+			case .Word_Ascii, .Word_Ascii_Negate, .Word_Start_Ascii, .Word_End_Ascii, .Word_Start_Half_Ascii, .Word_End_Half_Ascii:
+				need_word = true
+			case .Start:
+				need_start = true
+			case .Start_LF:
+				need_start, need_lf = true, true
+			case .Start_CRLF:
+				need_start, need_lf, need_cr = true, true, true
+			case .End_CRLF:
+				need_cr = true
 			}
 		}
 	}
+	for b in 0 ..< 256 {
+		c := byte_ctx(u8(b))
+		switch c {
+		case .LF: if !need_lf { c = .Other }
+		case .CR: if !need_cr { c = .Other }
+		case .Word: if !need_word { c = .Other }
+		case .Non_Ascii: if !d.has_uni_word { c = .Other }
+		case .Start, .Other:
+		}
+		d.ctx_of[b] = c
+	}
+	d.start_ctx = .Start if need_start else .Other
 	return
 }
 
@@ -202,12 +232,12 @@ compute :: proc(d: ^Lazy_Dfa, sid: i32, next: int) -> (to: i32, reset: bool) {
 	uniq := slice.unique(d.next[:])
 	if len(d.states) >= d.budget {
 		// the cache is full: start over, keeping only what the search needs next
-		ctx_next := byte_ctx(b)
+		ctx_next := d.ctx_of[b]
 		seeds := slice.clone(uniq, context.temp_allocator)
 		dfa_reset(d)
 		return state_for(d, ctx_next, seeds), true
 	}
-	return state_for(d, byte_ctx(b), uniq), false
+	return state_for(d, d.ctx_of[b], uniq), false
 }
 
 Dfa_Result :: enum { No_Match, Match, Quit }
@@ -230,7 +260,7 @@ prefilter_skip :: #force_inline proc(d: ^Lazy_Dfa, h: []u8, i: ^int, cur: ^int, 
 	if !ok { return false }
 	if r.start > i^ {
 		i^ = r.start
-		cur^ = int(start_state(d, byte_ctx(h[i^ - 1]))) * DFA_STRIDE
+		cur^ = int(start_state(d, d.ctx_of[h[i^ - 1]])) * DFA_STRIDE
 	}
 	return true
 }
@@ -238,8 +268,8 @@ prefilter_skip :: #force_inline proc(d: ^Lazy_Dfa, h: []u8, i: ^int, cur: ^int, 
 // the first position in h[start:end) (end included) where a match ends; look-behind sees
 // h[start-1], and the end of h is the end of the input
 dfa_find_earliest :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa_Result) {
-	ctx := Dfa_Ctx.Start
-	if start > 0 { ctx = byte_ctx(h[start - 1]) }
+	ctx := d.start_ctx
+	if start > 0 { ctx = d.ctx_of[h[start - 1]] }
 	i := start
 	cur := int(start_state(d, ctx)) * DFA_STRIDE
 	if d.pre != nil && i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }

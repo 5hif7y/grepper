@@ -366,6 +366,19 @@ RG_BUGS = [
      ("rg", [["-F", "-l", "alpha", "src"], ["-F", "-l", "alpha", "docs"]])),
     ("walk two roots, one deeper", "B2", ["-F", "-l", "alpha", "src/deep", "docs"], "tree", True,
      ("rg", [["-F", "-l", "alpha", "src/deep"], ["-F", "-l", "alpha", "docs"]])),
+    # zero patterns match nothing, so -v matches every line; rg 14.1.1 quits before searching
+    # (and 16.0.0 still matches everything with -i or -S, so -v prints nothing there). The
+    # answer is -v with a pattern that matches nothing, the empty class [a&&b].
+    ("invert zero patterns", "U1332", ["-n", "-v", "-f", "empty.txt", "plain.txt"], "", False,
+     ("rg", [["-n", "-v", "-e", "[a&&b]", "plain.txt"]])),
+    ("invert zero patterns, count", "U1332", ["-c", "-v", "-f", "empty.txt", "plain.txt", "words.txt"], "", False,
+     ("rg", [["-c", "-v", "-e", "[a&&b]", "plain.txt", "words.txt"]])),
+    ("invert zero patterns, ignore case", "U1332", ["-v", "-i", "-f", "empty.txt", "plain.txt"], "", False,
+     ("rg", [["-v", "-i", "-e", "[a&&b]", "plain.txt"]])),
+    ("invert zero patterns, smart case, words", "U1332", ["-v", "-S", "-w", "-f", "empty.txt", "plain.txt"], "", False,
+     ("rg", [["-v", "-S", "-w", "-e", "[a&&b]", "plain.txt"]])),
+    ("invert zero patterns, only matching", "U1332", ["-v", "-o", "-F", "-f", "empty.txt", "plain.txt"], "", False,
+     ("rg", [["-v", "-o", "-e", "[a&&b]", "plain.txt"]])),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

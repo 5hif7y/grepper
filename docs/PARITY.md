@@ -123,7 +123,7 @@ recorded here as such.
 
 | Upstream | Bug | Area | Status |
 |---|---|---|---|
-| #1332 #3001 | `rg -vf file` with an empty `file` should match every line | patterns | todo |
+| #1332 #3001 | `rg -vf file` with an empty `file` should match every line | patterns | fixed, also under `-i`/`-S`, where 16.0.0 still prints nothing |
 | #2177 | a UTF-8 BOM at the start of `.gitignore` (and the other ignore files) is part of the first pattern | ignore | todo |
 | #2944 | `--stats` "bytes searched" can be wrong | printer | todo |
 | #2990 | globs ending in `.` are mishandled | globset | todo |

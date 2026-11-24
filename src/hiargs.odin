@@ -341,7 +341,8 @@ hi_from_low :: proc(low: ^Low_Args) -> (h: Hi_Args, err: string) {
 }
 
 matches_possible :: proc(h: ^Hi_Args) -> bool {
-	if len(h.patterns) == 0 { return false }
+	// zero patterns match nothing, unless inverted (fix over 14.1.1, ripgrep 15.0.0's #1332)
+	if len(h.patterns) == 0 && !h.invert_match { return false }
 	if n, ok := h.max_count.?; ok && n == 0 { return false }
 	return true
 }

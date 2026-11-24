@@ -127,6 +127,20 @@ run :: proc(args: []string) -> int {
 // literals go to NVOL directly: -F, or patterns without a regex metacharacter (as ripgrep
 // extracts them); the rest to the interim regex engine
 build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
+	// grep-regex's ConfiguredHIR: unless every pattern is a plain literal, they are joined as
+	// (?:p1)|(?:p2)... and parsed by regex-syntax, whose errors ripgrep prints as they are
+	if !rg_is_fixed_strings(h) {
+		b: strings.Builder
+		for p, i in h.patterns {
+			if i > 0 { strings.write_byte(&b, '|') }
+			strings.write_string(&b, "(?:")
+			strings.write_string(&b, rg_escape(p) if h.fixed_strings else p)
+			strings.write_byte(&b, ')')
+		}
+		if _, perr := regex_parse(strings.to_string(b)); perr != nil {
+			return m, suggest_pcre2(ast_error_string(perr.?))
+		}
+	}
 	ignore_case := h.case_mode == .Insensitive
 	plain := !ignore_case
 	if plain && !h.fixed_strings {
@@ -138,4 +152,41 @@ build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
 		return matcher_literals(h.patterns[:]), nil
 	}
 	return matcher_regex(join_patterns(h.patterns[:], h.fixed_strings), ignore_case)
+}
+
+// regex_syntax::escape: every meta character preceded by a backslash
+rg_escape :: proc(p: string) -> string {
+	b: strings.Builder
+	for r in p {
+		if is_regex_meta_character(r) { strings.write_byte(&b, '\\') }
+		strings.write_rune(&b, r)
+	}
+	return strings.to_string(b)
+}
+
+// Config::is_fixed_strings: every pattern a literal (-F, or no meta character) without the
+// line terminator, and no case folding
+rg_is_fixed_strings :: proc(h: ^Hi_Args) -> bool {
+	if h.case_mode != .Sensitive { return false }
+	term: u8 = 0 if h.null_data else '\n'
+	has_term :: proc(p: string, term: u8, crlf: bool) -> bool {
+		for c in transmute([]u8)p {
+			if c == term || (crlf && (c == '\r' || c == '\n')) { return true }
+		}
+		return false
+	}
+	for p in h.patterns {
+		if !h.fixed_strings {
+			for r in p { if is_regex_meta_character(r) { return false } }
+		}
+		if !h.multiline && has_term(p, term, h.crlf) { return false }
+	}
+	return true
+}
+
+// hiargs.rs's suggest_pcre2 (ripgrep 14.1.1 is built with PCRE2): a hint after errors about
+// backreferences and look-around
+suggest_pcre2 :: proc(msg: string) -> string {
+	if !strings.contains(msg, "backreferences") && !strings.contains(msg, "look-around") { return msg }
+	return strings.concatenate({msg, "\n\nConsider enabling PCRE2 with the --pcre2 flag, which can handle backreferences\nand look-around."})
 }

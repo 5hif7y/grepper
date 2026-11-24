@@ -124,7 +124,7 @@ recorded here as such.
 | Upstream | Bug | Area | Status |
 |---|---|---|---|
 | #1332 #3001 | `rg -vf file` with an empty `file` should match every line | patterns | fixed, also under `-i`/`-S`, where 16.0.0 still prints nothing |
-| #2177 | a UTF-8 BOM at the start of `.gitignore` (and the other ignore files) is part of the first pattern | ignore | todo |
+| #2177 | a UTF-8 BOM at the start of `.gitignore` (and the other ignore files) is part of the first pattern | ignore | fixed |
 | #2944 | `--stats` "bytes searched" can be wrong | printer | todo |
 | #2990 | globs ending in `.` are mishandled | globset | todo |
 | #3100 | `-r` drops line terminators | replace | todo, with `-r` |
@@ -134,7 +134,7 @@ recorded here as such.
 | #3179 | absolute paths with a global gitignore | ignore | todo |
 | #3593 | `-v -m N -A k` prints the rest of the input as matches | searcher | does not apply: 14.1.1 prints the issue's case right (`1:a 2:b 3-foo`); the bug came with 15.x. `tests/line_paths.py` holds grepper to the behaviour the issue expects |
 | #3581 #1764 | `-g !DIRNAME/` does not match when the working directory is `DIRNAME` | globs | todo |
-| #3605 #3604 | an ignore file stops being read at an invalid UTF-8 line | ignore | todo |
+| #3605 #3604 | an ignore file stops being read at an invalid UTF-8 line | ignore | already: grepper reads the lines after it, with no message, as 16.0.0 |
 | #3527 | a lone `!` line in a gitignore is not a no-op | ignore | todo |
 | #3477 | trailing spaces in gitignore patterns are parsed wrongly | ignore | todo |
 | #2745 | glob character classes match the path separator | globset | todo |

@@ -394,6 +394,9 @@ RG_BUGS = [
      (0, b"")),
     ("quiet files without match, walk", "U3108", ["-q", "--files-without-match", "zzz"], "tree", False,
      (0, b"")),
+    # a UTF-8 BOM opens bom/.gitignore: rg 14.1.1 reads its first pattern as BOM+before.txt
+    ("ignore file with a BOM", "U2177", ["-l", "hit", "bom"], "tree5", True,
+     (0, os.path.join("bom", "other.txt").encode() + b"\n")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it
@@ -447,6 +450,14 @@ TREE3 = {
 }
 
 
+# ignore-file syntax that ripgrep 14.1.1 reads unlike git, one directory per case
+TREE5 = {
+    "bom/.gitignore": b"\xef\xbb\xbfbefore.txt\nafter.txt\n",
+    "bom/before.txt": b"hit\n",
+    "bom/after.txt": b"hit\n",
+    "bom/other.txt": b"hit\n",
+}
+
 # parent-directory rules that name directories below the search root (PARITY B3)
 TREE4 = {
     ".gitignore": b"docs/a/b/draft*\n",
@@ -485,6 +496,7 @@ def write_fixtures():
     tree2 = write_tree("tree2", TREE2, mtimes=True)
     write_tree("tree3", TREE3)
     write_tree("tree4", TREE4)
+    write_tree("tree5", TREE5)
     with open(os.path.join(FIX, "extra.ignore"), "wb") as f:
         f.write(b"c.txt\n*.py\n")
     if os.name == "nt":

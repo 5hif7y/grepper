@@ -114,6 +114,11 @@ gitignore_add_file :: proc(g: ^Gitignore, path: string) -> (read: bool, errs: [d
 		}
 		lineno += 1
 		if strings.has_suffix(line, "\r") { line = line[:len(line) - 1] }
+		// a UTF-8 byte order mark before the first line is not part of it, as in git (fix
+		// over 14.1.1, ripgrep 15.0.0's #2177; trim_start_matches drops any number of them)
+		if lineno == 1 {
+			for strings.has_prefix(line, "\xef\xbb\xbf") { line = line[3:] }
+		}
 		if msg, bad := gitignore_add_line(g, line).?; bad {
 			append(&errs, msg)
 		}

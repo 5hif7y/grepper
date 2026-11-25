@@ -90,6 +90,11 @@ CASES = [
     ("no match", ["-F", "zzz", "plain.txt"]),
     ("empty file", ["-F", "alpha", "empty.txt"]),
     ("many lines", ["-F", "-n", "needle", "long.txt"]),
+    # a DFA cache too small for any lazy DFA: every search on the backtracker and PikeVM
+    ("no lazy DFA, lines", ["--dfa-size-limit", "1K", "-n", "alpha|delta", "plain.txt"]),
+    ("no lazy DFA, captures", ["--dfa-size-limit", "1K", "-o", "-r", "<$1>", "(a)l(p)ha", "plain.txt"]),
+    ("no lazy DFA, multi line", ["--dfa-size-limit", "1K", "-U", "-n", "beta\\ngamma", "plain.txt"]),
+    ("no lazy DFA, word", ["--dfa-size-limit", "1K", "-w", "-c", "alpha", "plain.txt"]),
     # \z ends each line's search: the reverse anchored strategy, in the candidate search too
     ("end anchored, count", ["-c", "[a-z]+\\z", "plain.txt"]),
     ("end anchored, only matching", ["-o", "-n", "\\w+\\s*\\z", "plain.txt"]),

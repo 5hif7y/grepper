@@ -40,6 +40,9 @@ Matcher :: struct {
 	// find a candidate line, which the regex then confirms (nil: none)
 	fast_line: ^Prefilter,
 	strategy:  Meta_Strategy,
+	// whether the lazy DFAs fit --dfa-size-limit at all; without them the backtracker and
+	// the PikeVM run every search, and no reverse strategy is used
+	dfa_ok:    bool,
 	suffix_pre: ^Prefilter,   // ReverseSuffix: the longest common suffix's prefilter
 	// ReverseInner: the inner literals' prefilter, and the part of the regex before them
 	// compiled in reverse, with its All DFA
@@ -163,6 +166,8 @@ matcher_pike :: proc(h: ^Hir, pre: ^Prefilter) -> (m: Matcher) {
 	// regex-automata leaves the unanchored prefix out of an NFA anchored at the start
 	m.dfa_fwd = dfa_new(m.nfa, .Leftmost_First, !look_set_contains(h.props.look_set_prefix, .Start))
 	m.dfa_rev = dfa_new(m.nfa_rev, .All)
+	m.dfa_ok = dfa_capacity_suffices(m.nfa) && dfa_capacity_suffices(m.nfa_rev)
+	if !m.dfa_ok { return }
 	anchored_start := look_set_contains(h.props.look_set_prefix, .Start)
 	// ReverseAnchored::new: always anchored at the end (\z) and not at the start; the lazy
 	// DFAs are always there
@@ -206,8 +211,10 @@ try_reverse_suffix :: proc(m: ^Matcher, h: ^Hir) -> bool {
 try_reverse_inner :: proc(m: ^Matcher, h: ^Hir) -> bool {
 	ip := inner_prefilter(h) or_return
 	if !reverse_inner_has_no_earlier_match(ip.prefix, ip.literals) { return false }
-	m.inner_nfa = new(Rx_NFA)
-	m.inner_nfa^ = rx_compile_reverse(ip.prefix)
+	inner := new(Rx_NFA)
+	inner^ = rx_compile_reverse(ip.prefix)
+	if !dfa_capacity_suffices(inner) { return false }
+	m.inner_nfa = inner
 	m.inner_dfa = dfa_new(m.inner_nfa, .All)
 	m.inner_pre = ip.pre
 	m.strategy = .Reverse_Inner
@@ -348,6 +355,7 @@ core_slots :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: b
 @(private="file")
 earliest :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
 	end_ := len(hay)
+	if !m.dfa_ok { return pike_end(m, hay, start) }
 	switch m.strategy {
 	case .Core:
 	case .Reverse_Anchored:
@@ -494,6 +502,7 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 // give up
 @(private="file")
 core_find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
+	if !m.dfa_ok { return core_slots(m, hay, start, end) }
 	ds, de, r := find_dfa(m, hay[:end], start, end)
 	switch r {
 	case .Match: return ds, de, true

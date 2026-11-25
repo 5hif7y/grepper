@@ -84,7 +84,15 @@ Lazy_Dfa :: struct {
 	closure:      [dynamic]i32,
 	next:         [dynamic]i32,
 	key:          [dynamic]u8,
-	budget:       int,        // states before the cache is cleared
+	// the cache (hybrid::dfa::Config::cache_capacity, from --dfa-size-limit): the bytes its
+	// states use, and when it gives up (minimum_cache_clear_count 3, minimum_bytes_per_state
+	// 10, as the meta engine configures them)
+	capacity:       int,
+	mem:            int,
+	clear_count:    int,
+	searched:       int,      // bytes searched since the last clear, by finished searches
+	progress_start: int,      // where the current search's progress since a clear began
+	at:             int,      // the position of the transition being computed
 	accel_checks: int,        // states still to check for acceleration in this cache
 	start_ids:    [Dfa_Ctx]i32, // the start state per context once built (-1: not yet)
 	// an unanchored leftmost-first DFA's anchored start states (Anchored::Pattern), for the
@@ -103,7 +111,7 @@ dfa_new :: proc(n: ^Rx_NFA, mode := Dfa_Mode.Earliest, unanchored := true) -> (d
 	for &x in d.start_ids { x = -1 }
 	for &x in d.start_ids_anchored { x = -1 }
 	d.mark = make([]u32, len(n.states))
-	d.budget = 4096
+	d.capacity = dfa_cache_capacity
 	d.accel_checks = DFA_ACCEL_CHECKS
 	need_start, need_lf, need_cr, need_word := false, false, false, false
 	for s in n.states {
@@ -140,6 +148,33 @@ dfa_new :: proc(n: ^Rx_NFA, mode := Dfa_Mode.Earliest, unanchored := true) -> (d
 	}
 	d.start_ctx = .Start if need_start else .Other
 	return
+}
+
+// grep-regex's dfa_size_limit: 1000 MiB unless --dfa-size-limit says otherwise
+dfa_cache_capacity := 1000 * (1 << 20)
+
+// the bytes one state costs: its row of transitions, its NFA states (kept in the state and
+// in the index's key), and the state itself
+@(private="file")
+state_cost :: #force_inline proc(seeds: int) -> int {
+	return DFA_STRIDE * size_of(i32) + 2 * (seeds * 4 + 1) + size_of(Dfa_State)
+}
+
+// hybrid::dfa's minimum_cache_capacity, in grepper's terms: the start states of every context,
+// and room for a few more; below it there is no lazy DFA (the builder's "insufficient cache
+// capacity"), and the meta engine runs without one
+dfa_capacity_suffices :: proc(n: ^Rx_NFA) -> bool {
+	// as minimum_cache_capacity counts it: the NFA's two sparse sets, and the start states
+	// plus 5 (its MIN_STATES), each a row with no NFA states yet
+	return dfa_cache_capacity >= 2 * len(n.states) * 4 + (len(Dfa_Ctx) + 5) * state_cost(0)
+}
+
+// try_clear_cache: once cleared 3 times, a cache that has searched fewer than 10 bytes per
+// state since its last clear gives up (the search quits and the caller falls back)
+@(private="file")
+gives_up :: proc(d: ^Lazy_Dfa) -> bool {
+	if d.clear_count < 3 { return false }
+	return d.searched + abs(d.at - d.progress_start) < 10 * len(d.states)
 }
 
 dfa_clone :: proc(d: Lazy_Dfa) -> (c: Lazy_Dfa) {
@@ -209,6 +244,7 @@ state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32, unanchored := false,
 	case .All:
 	}
 	append(&d.states, st)
+	d.mem += state_cost(len(seeds))
 	base := len(d.trans)
 	resize(&d.trans, base + DFA_STRIDE)
 	for k in base ..< base + DFA_STRIDE { d.trans[k] = DFA_UNKNOWN }
@@ -243,6 +279,10 @@ start_state :: #force_inline proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, anchored := false)
 
 @(private="file")
 dfa_reset :: proc(d: ^Lazy_Dfa) {
+	d.mem = 0
+	d.clear_count += 1
+	d.searched = 0
+	d.progress_start = d.at
 	for &x in d.start_ids { x = -1 }
 	for &x in d.start_ids_anchored { x = -1 }
 	for s in d.states { delete(s.seeds) }
@@ -304,8 +344,10 @@ compute :: proc(d: ^Lazy_Dfa, sid: i32, next: int) -> (to: i32, reset: bool) {
 	}
 	slice.sort(d.next[:])
 	uniq := slice.unique(d.next[:])
-	if len(d.states) >= d.budget {
-		// the cache is full: start over, keeping only what the search needs next
+	if d.mem + state_cost(len(uniq)) > d.capacity {
+		// the cache is full: start over, keeping only what the search needs next; or give
+		// up (QUIT, not stored: reset is true)
+		if gives_up(d) { return DFA_QUIT, true }
 		ctx_next := d.ctx_of[b]
 		seeds := slice.clone(uniq, context.temp_allocator)
 		dfa_reset(d)
@@ -333,7 +375,7 @@ encode :: #force_inline proc(d: ^Lazy_Dfa, to: i32) -> i32 {
 check_accel :: proc(d: ^Lazy_Dfa, sid: i32) {
 	st := &d.states[sid]
 	st.accel_checked = true
-	if d.accel_checks <= 0 || len(d.states) + DFA_STRIDE > d.budget { return }
+	if d.accel_checks <= 0 || d.mem + 256 * state_cost(len(d.nfa.states)) > d.capacity { return }
 	if d.pre != nil && st.is_start { return }
 	d.accel_checks -= 1
 	base := int(sid) * DFA_STRIDE
@@ -396,6 +438,8 @@ dfa_find_earliest :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r
 	ctx := d.start_ctx
 	if start > 0 { ctx = d.ctx_of[h[start - 1]] }
 	i := start
+	d.progress_start = i
+	defer d.searched += abs(i - d.progress_start)
 	cur := int(start_state(d, ctx)) * DFA_STRIDE
 	if d.pre != nil && i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
 	for i < end {
@@ -412,6 +456,7 @@ dfa_find_earliest :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r
 		next := d.trans[cur + b]
 		if next == DFA_UNKNOWN {
 			sid := i32(cur / DFA_STRIDE)
+			d.at = i
 			to, reset := compute(d, sid, b)
 			next = encode(d, to)
 			// after a reset of the cache the state at cur is gone
@@ -540,7 +585,8 @@ compute_ordered :: proc(d: ^Lazy_Dfa, sid: i32, next: int) -> (to: i32, reset: b
 		seeds = slice.unique(d.next[:])
 	}
 	if len(seeds) == 0 && !next_unanchored && !matched { return DFA_DEAD, false }
-	if len(d.states) >= d.budget {
+	if d.mem + state_cost(len(seeds)) > d.capacity {
+		if gives_up(d) { return DFA_QUIT, true }
 		ctx_next := d.ctx_of[b]
 		kept := slice.clone(seeds, context.temp_allocator)
 		dfa_reset(d)
@@ -576,6 +622,8 @@ dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int, anchored := false, 
 	ctx := d.start_ctx
 	if start > 0 { ctx = d.ctx_of[h[start - 1]] }
 	i := start
+	d.progress_start = i
+	defer d.searched += abs(i - d.progress_start)
 	mat := -1
 	cur := int(start_state(d, ctx, anchored)) * DFA_STRIDE
 	if d.pre != nil && !anchored && i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
@@ -588,6 +636,7 @@ dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int, anchored := false, 
 			i += 1
 		}
 		if i >= end { break }
+		d.at = i
 		next := transition(d, &cur, int(h[i]), true)
 		switch {
 		case next == DFA_DEAD:
@@ -636,6 +685,8 @@ dfa_find_rev :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa
 	ctx := d.start_ctx
 	if end < len(h) { ctx = d.ctx_of[h[end]] }
 	i := end
+	d.progress_start = i
+	defer d.searched += abs(i - d.progress_start)
 	mat := -1
 	cur := int(start_state(d, ctx)) * DFA_STRIDE
 	for i > start {
@@ -647,6 +698,7 @@ dfa_find_rev :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa
 			i -= 1
 		}
 		if i <= start { break }
+		d.at = i - 1
 		next := transition(d, &cur, int(h[i - 1]), false)
 		switch {
 		case next == DFA_DEAD: return mat, .Match if mat >= 0 else .No_Match
@@ -682,6 +734,8 @@ dfa_find_rev_limited :: proc(d: ^Lazy_Dfa, h: []u8, start, end, min_start: int) 
 	ctx := d.start_ctx
 	if end < len(h) { ctx = d.ctx_of[h[end]] }
 	i := end
+	d.progress_start = i
+	defer d.searched += abs(i - d.progress_start)
 	mat := -1
 	cur := int(start_state(d, ctx)) * DFA_STRIDE
 	lim := max(start, min_start)
@@ -696,6 +750,7 @@ dfa_find_rev_limited :: proc(d: ^Lazy_Dfa, h: []u8, start, end, min_start: int) 
 		}
 		if i <= start { break }
 		if i != end && i <= min_start { return 0, .No_Match, true }
+		d.at = i - 1
 		next := transition(d, &cur, int(h[i - 1]), false)
 		switch {
 		case next == DFA_DEAD: return mat, .Match if mat >= 0 else .No_Match, false

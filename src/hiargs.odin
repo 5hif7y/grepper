@@ -248,6 +248,8 @@ hi_from_low :: proc(low: ^Low_Args) -> (h: Hi_Args, err: string) {
 		}
 	}
 
+	// the lazy DFAs' cache capacity (grep-regex's dfa_size_limit, 1000 MiB by default)
+	if n, has := low.dfa_size_limit.?; has { dfa_cache_capacity = int(min(n, u64(max(int)))) }
 	// memory maps for up to 10 paths that are all files (the searcher then sees one slice)
 	switch low.mmap {
 	case .Auto:

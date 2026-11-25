@@ -218,10 +218,36 @@ core_slots :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: b
 	return m.slots[0], m.slots[1], true
 }
 
-// whether a match ends in hay[start:], and where the first does: the lazy DFA, or the
-// PikeVM when the DFA gives up
+// Strategy::search_half with an earliest input (grep-regex's shortest_match_at, and
+// is_match): where a match ends in hay[start:]. A strategy other than Core finds a start and
+// then the first end from there; when it gives up, the Core search
 @(private="file")
 earliest :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
+	end_ := len(hay)
+	switch m.strategy {
+	case .Core:
+	case .Reverse_Anchored:
+		// a match can only end at the end of the input
+		_, r := dfa_find_rev(&m.dfa_rev, hay, start, end_)
+		switch r {
+		case .Match: return end_, true
+		case .No_Match: return
+		case .Quit: return pike_end(m, hay, start)
+		}
+	}
+	return core_earliest(m, hay, start)
+}
+
+// search_half_nofail: the PikeVM's end of the leftmost-first match
+@(private="file")
+pike_end :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
+	if !pike_search(m.nfa, &m.cache, hay, start, len(hay), false, m.slots) { return }
+	return m.slots[1], true
+}
+
+// Core::search_half, earliest: the lazy DFA, or the PikeVM when the DFA gives up
+@(private="file")
+core_earliest :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
 	at, r := dfa_find_earliest(&m.dfa, hay, start, len(hay))
 	switch r {
 	case .Match: return at, true

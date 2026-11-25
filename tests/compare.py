@@ -88,6 +88,10 @@ CASES = [
     ("no match", ["-F", "zzz", "plain.txt"]),
     ("empty file", ["-F", "alpha", "empty.txt"]),
     ("many lines", ["-F", "-n", "needle", "long.txt"]),
+    # \z ends each line's search: the reverse anchored strategy, in the candidate search too
+    ("end anchored, count", ["-c", "[a-z]+\\z", "plain.txt"]),
+    ("end anchored, only matching", ["-o", "-n", "\\w+\\s*\\z", "plain.txt"]),
+    ("end anchored, inverted", ["-v", "-n", "a\\z", "plain.txt"]),
     ("output past one block", ["-F", "-n", "alpha", "wide.txt"]),
     ("output past one block, heading", ["-j1", "-H", "--heading", "-F", "alpha", "wide.txt", "plain.txt"]),
     ("output past one block, stats", ["-j1", "--stats", "-F", "alpha", "wide.txt", "plain.txt"]),

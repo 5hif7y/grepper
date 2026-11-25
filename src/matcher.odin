@@ -11,7 +11,7 @@ Matcher_Kind :: enum { Empty, Literal, Literals, Pike }
 
 // regex-automata's meta strategy over the Core engines (meta/strategy.rs::new), tried in this
 // order: the reverse anchored, reverse suffix and reverse inner searches, else Core
-Meta_Strategy :: enum { Core, Reverse_Anchored, Reverse_Suffix }
+Meta_Strategy :: enum { Core, Reverse_Anchored, Reverse_Suffix, Reverse_Inner }
 
 Matcher :: struct {
 	kind:     Matcher_Kind,
@@ -41,6 +41,11 @@ Matcher :: struct {
 	fast_line: ^Prefilter,
 	strategy:  Meta_Strategy,
 	suffix_pre: ^Prefilter,   // ReverseSuffix: the longest common suffix's prefilter
+	// ReverseInner: the inner literals' prefilter, and the part of the regex before them
+	// compiled in reverse, with its All DFA
+	inner_pre: ^Prefilter,
+	inner_nfa: ^Rx_NFA,
+	inner_dfa: Lazy_Dfa,
 }
 
 // a worker's own copy: the memmem finders and the PikeVM's scratch change while searching
@@ -48,6 +53,8 @@ matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 	c = m
 	c.fast_line = prefilter_clone(m.fast_line)
 	c.suffix_pre = prefilter_clone(m.suffix_pre)
+	c.inner_pre = prefilter_clone(m.inner_pre)
+	if m.inner_nfa != nil { c.inner_dfa = dfa_clone(m.inner_dfa) }
 	if m.finders != nil {
 		c.finders = make([]nvol.Memmem_Finder, len(m.finders))
 		copy(c.finders, m.finders)
@@ -163,26 +170,48 @@ matcher_pike :: proc(h: ^Hir, pre: ^Prefilter) -> (m: Matcher) {
 		m.strategy = .Reverse_Anchored
 		return
 	}
-	if anchored_start { return }
-	// ReverseSuffix::new: unless the prefix prefilter is already fast, the longest common
-	// suffix of the regex's suffixes (leftmost-first), when it is not empty and its own
-	// prefilter is fast
-	if pre != nil && prefilter_is_fast(pre) { return }
+	// the reverse suffix and inner searches assume unanchored searches, and would scan too
+	// much for a regex anchored at the start; and a fast prefix prefilter is better
+	if anchored_start || (pre != nil && prefilter_is_fast(pre)) { return }
+	if try_reverse_suffix(&m, h) { return }
+	try_reverse_inner(&m, h)
+	return
+}
+
+// ReverseSuffix::new: the longest common suffix of the regex's suffixes (leftmost-first),
+// when it is not empty, its own prefilter is fast, and regex 1.13.1's proofs hold
+@(private="file")
+try_reverse_suffix :: proc(m: ^Matcher, h: ^Hir) -> bool {
 	e := extractor_new(.Suffix)
 	suffixes := extractor_extract(&e, h)
 	seq_optimize_for_suffix_by_preference(&suffixes)
 	lcs, has := seq_longest_common_suffix(suffixes)
-	if !has || len(lcs) == 0 { return }
+	if !has || len(lcs) == 0 { return false }
 	needles := make([][]u8, 1)
 	needles[0] = lcs
 	sp, built := prefilter_new(needles)
-	if !built || !prefilter_is_fast(sp) { return }
+	if !built || !prefilter_is_fast(sp) { return false }
 	// regex 1.13.1's fix (meta_prefix.odin): only when no earlier match can end at a later
 	// occurrence of the suffix
-	if !reverse_suffix_has_no_earlier_match(h, lcs) { return }
+	if !reverse_suffix_has_no_earlier_match(h, lcs) { return false }
 	m.strategy = .Reverse_Suffix
 	m.suffix_pre = sp
-	return
+	return true
+}
+
+// ReverseInner::new: inner literals with a fast prefilter (meta_reverse_inner.odin), when
+// regex 1.13.1's proofs hold for the part of the regex before them, which is compiled in
+// reverse without captures
+@(private="file")
+try_reverse_inner :: proc(m: ^Matcher, h: ^Hir) -> bool {
+	ip := inner_prefilter(h) or_return
+	if !reverse_inner_has_no_earlier_match(ip.prefix, ip.literals) { return false }
+	m.inner_nfa = new(Rx_NFA)
+	m.inner_nfa^ = rx_compile_reverse(ip.prefix)
+	m.inner_dfa = dfa_new(m.inner_nfa, .All)
+	m.inner_pre = ip.pre
+	m.strategy = .Reverse_Inner
+	return true
 }
 
 // hybrid::regex::Regex::try_search: the end of the leftmost-first match from the forward
@@ -214,6 +243,14 @@ find_strategy :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok
 		case .No_Match: return
 		case .Quit: return core_slots(m, hay, start, end)
 		}
+	case .Reverse_Inner:
+		ms, me, r, quadratic := inner_full(m, hay[:end], start, end, false)
+		if quadratic { return core_find(m, hay, start, end) }
+		switch r {
+		case .Match: return ms, me, true
+		case .No_Match: return
+		case .Quit: return core_slots(m, hay, start, end)
+		}
 	case .Reverse_Suffix:
 		ms, r, quadratic := suffix_start(m, hay[:end], start, end)
 		if quadratic { return core_find(m, hay, start, end) }
@@ -232,6 +269,38 @@ find_strategy :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok
 		}
 	}
 	unreachable()
+}
+
+// ReverseInner::try_search_full: each occurrence of the inner literals, in order, with the
+// reverse DFA of the prefix run anchored at its start for the leftmost start of the prefix,
+// then the forward DFA, anchored at that start, for the end (the first end when earliest).
+// The reverse scans stop at the previous occurrence's end, and an occurrence starting
+// before the end of the last forward scan gives up (both quadratic)
+@(private="file")
+inner_full :: proc(m: ^Matcher, h: []u8, start, end: int, earliest: bool) -> (ms, me: int, r: Dfa_Result, quadratic: bool) {
+	from := start
+	min_match_start, min_pre_start := 0, 0
+	for {
+		lit := prefilter_find(m.inner_pre, h, from, end) or_return
+		if lit.start < min_pre_start { return 0, 0, .No_Match, true }
+		hs, rr, quad := dfa_find_rev_limited(&m.inner_dfa, h, start, lit.start, min_match_start)
+		if quad { return 0, 0, .No_Match, true }
+		if rr == .Quit { return 0, 0, .Quit, false }
+		if rr == .Match {
+			stop: int
+			fe, fr := dfa_find_fwd(&m.dfa_fwd, h, hs, end, anchored = true, earliest = earliest, stop = &stop)
+			switch fr {
+			case .Match: return hs, fe, .Match, false
+			case .Quit: return 0, 0, .Quit, false
+			case .No_Match:
+				min_pre_start = stop
+				from = lit.start + 1
+			}
+		}
+		if from >= end { return 0, 0, .No_Match, false }
+		from = lit.start + 1
+		min_match_start = lit.end
+	}
 }
 
 // ReverseSuffix::try_search_half_start: each occurrence of the suffix, in order, with the
@@ -286,6 +355,14 @@ earliest :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
 		_, r := dfa_find_rev(&m.dfa_rev, hay, start, end_)
 		switch r {
 		case .Match: return end_, true
+		case .No_Match: return
+		case .Quit: return pike_end(m, hay, start)
+		}
+	case .Reverse_Inner:
+		_, me, r, quadratic := inner_full(m, hay, start, end_, true)
+		if quadratic { return core_earliest(m, hay, start) }
+		switch r {
+		case .Match: return me, true
 		case .No_Match: return
 		case .Quit: return pike_end(m, hay, start)
 		}

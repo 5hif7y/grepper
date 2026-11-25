@@ -570,8 +570,9 @@ transition :: #force_inline proc(d: ^Lazy_Dfa, cur: ^int, next: int, accel: bool
 // hybrid::search::find_fwd, leftmost-first: the end of the leftmost-first match in
 // h[start:end); look-behind sees h[start-1], and h[end] (or the end of h) is the look-ahead
 // at the end. Anchored, the match must start at start (no prefilter then); earliest, the
-// first match state ends the search (Input::earliest)
-dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int, anchored := false, earliest := false) -> (at: int, r: Dfa_Result) {
+// first match state ends the search (Input::earliest). With no match, stop gets where the
+// search ended: the byte that led to the dead state, or end (meta::stopat)
+dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int, anchored := false, earliest := false, stop: ^int = nil) -> (at: int, r: Dfa_Result) {
 	ctx := d.start_ctx
 	if start > 0 { ctx = d.ctx_of[h[start - 1]] }
 	i := start
@@ -589,7 +590,9 @@ dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int, anchored := false, 
 		if i >= end { break }
 		next := transition(d, &cur, int(h[i]), true)
 		switch {
-		case next == DFA_DEAD: return mat, .Match if mat >= 0 else .No_Match
+		case next == DFA_DEAD:
+			if stop != nil { stop^ = i }
+			return mat, .Match if mat >= 0 else .No_Match
 		case next == DFA_QUIT: return i, .Quit
 		case next <= DFA_TAG:
 			v := int(DFA_TAG - next)
@@ -622,6 +625,7 @@ dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int, anchored := false, 
 		if t == DFA_MATCH { mat = end }
 	}
 	if t == DFA_QUIT { return end, .Quit }
+	if stop != nil { stop^ = end }
 	return mat, .Match if mat >= 0 else .No_Match
 }
 

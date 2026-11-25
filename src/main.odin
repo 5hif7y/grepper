@@ -139,9 +139,10 @@ build_matcher :: proc(h: ^Hi_Args) -> (m: Matcher, err: Maybe(string)) {
 		return matcher_pike(hir_fail(), nil), nil
 	}
 	if rg_is_fixed_strings(h) {
-		if h.boundary == .None && !h.null_data {
-			return matcher_literals(h.patterns[:]), nil
-		}
+		// as grep-regex: an alternation of the literals, which the meta strategy turns into
+		// a literal search only when its prefixes allow (Pre::from_prefixes). A shortcut to
+		// the literal matcher here searched each needle in turn once Teddy refused the set
+		// (more than 64): 500 words took over 300 s on 524 MiB, where rg takes 1.4 s
 		alts: [dynamic]^Hir
 		for p in h.patterns { append(&alts, hir_literal(transmute([]u8)p)) }
 		hir = hir_alternation(alts[:])

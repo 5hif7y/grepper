@@ -25,6 +25,8 @@ FILES = {
     "wide.txt": b"".join(b"row %05d alpha %s\n" % (i, b"x" * 40) for i in range(4000)),
     # a match that starts before the first suffix occurrence it could end at (regex #1354)
     "rsuffix.txt": b"a z xz\nq zz z\n",
+    # more fixed strings than Teddy takes (64): the meta strategy's path, not a literal loop
+    "many_words.txt": b"".join(b"line %d\n" % i for i in range(0, 5000, 50)),
     "long.txt": b"".join(b"line %d %s\n" % (i, b"needle" if i % 97 == 0 else b"hay") for i in range(5000)),
     "utf8.txt": "café ü naïve\nnothing\nCAFÉ\n".encode(),
     "binary.bin": b"text with alpha\x00\x01\x02 more alpha\n",
@@ -90,6 +92,9 @@ CASES = [
     ("no match", ["-F", "zzz", "plain.txt"]),
     ("empty file", ["-F", "alpha", "empty.txt"]),
     ("many lines", ["-F", "-n", "needle", "long.txt"]),
+    ("many fixed strings, count", ["-F", "-c", "-f", "many_words.txt", "long.txt"]),
+    ("many fixed strings, only matching", ["-F", "-o", "-n", "-f", "many_words.txt", "long.txt"]),
+    ("many fixed strings, words", ["-F", "-w", "-c", "-f", "many_words.txt", "long.txt"]),
     # a DFA cache too small for any lazy DFA: every search on the backtracker and PikeVM
     ("no lazy DFA, lines", ["--dfa-size-limit", "1K", "-n", "alpha|delta", "plain.txt"]),
     ("no lazy DFA, captures", ["--dfa-size-limit", "1K", "-o", "-r", "<$1>", "(a)l(p)ha", "plain.txt"]),

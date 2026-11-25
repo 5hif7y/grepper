@@ -34,6 +34,8 @@ def run(exe, pattern, path):
 
 
 def main():
+    # a report holds patterns and bytes the Windows console's code page cannot encode
+    sys.stdout.reconfigure(errors="backslashreplace")
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument("--grepper", default=os.path.join(here, "grepper.exe" if os.name == "nt" else "grepper"))

@@ -25,6 +25,8 @@ WORDS = ["a", "b", "foo", "c", "foox", "xfoo", ""]
 
 
 def main():
+    # a report holds patterns and bytes the Windows console's code page cannot encode
+    sys.stdout.reconfigure(errors="backslashreplace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--grepper", default=os.path.join(ROOT, "grepper.exe" if os.name == "nt" else "grepper"))
     ap.add_argument("--seed", type=int, default=1)

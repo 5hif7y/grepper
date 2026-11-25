@@ -37,6 +37,8 @@ def spans(exe, args, path):
 
 
 def main():
+    # a report holds patterns and bytes the Windows console's code page cannot encode
+    sys.stdout.reconfigure(errors="backslashreplace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--grepper", default=os.path.join(ROOT, "grepper.exe" if os.name == "nt" else "grepper"))
     ap.add_argument("--rg", default=shutil.which("rg"))

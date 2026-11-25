@@ -50,6 +50,9 @@ Matcher :: struct {
 	inner_pre: ^Prefilter,
 	inner_nfa: ^Rx_NFA,
 	inner_dfa: Lazy_Dfa,
+	// the one-pass DFA, for anchored capture searches (nil: the regex is not one-pass, or
+	// has no explicit capture groups, as OnePass::new skips it then)
+	onepass:   ^Onepass,
 }
 
 // a worker's own copy: the memmem finders and the PikeVM's scratch change while searching
@@ -59,6 +62,7 @@ matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 	c.suffix_pre = prefilter_clone(m.suffix_pre)
 	c.inner_pre = prefilter_clone(m.inner_pre)
 	if m.inner_nfa != nil { c.inner_dfa = dfa_clone(m.inner_dfa) }
+	c.onepass = onepass_clone(m.onepass)
 	if m.finders != nil {
 		c.finders = make([]nvol.Memmem_Finder, len(m.finders))
 		copy(c.finders, m.finders)
@@ -196,6 +200,7 @@ matcher_pike :: proc(h: ^Hir, pre: ^Prefilter) -> (m: Matcher) {
 	m.cache = pike_cache_new(m.nfa)
 	m.bt = backtrack_cache_new(m.nfa)
 	m.bt_max = backtrack_max_haystack_len(m.nfa)
+	if h.props.explicit_captures_len > 0 { m.onepass, _ = onepass_build(m.nfa) }
 	m.slots = make([]int, m.nfa.slots)
 	m.dfa = dfa_new(m.nfa)
 	m.nfa_rev = new(Rx_NFA)
@@ -391,7 +396,9 @@ find_slots :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: b
 @(private="file")
 slots_in_match :: proc(m: ^Matcher, h: []u8, ms, me: int) -> (s, e: int, ok: bool) {
 	found: bool
-	if me - ms <= m.bt_max {
+	if m.onepass != nil {
+		found = onepass_search(m.onepass, h, ms, me, m.slots)
+	} else if me - ms <= m.bt_max {
 		found = backtrack_search(m.nfa, &m.bt, h, ms, me, m.slots)
 	} else {
 		found = pike_search(m.nfa, &m.cache, h, ms, me, true, m.slots)

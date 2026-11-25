@@ -92,6 +92,12 @@ CASES = [
     ("no match", ["-F", "zzz", "plain.txt"]),
     ("empty file", ["-F", "alpha", "empty.txt"]),
     ("many lines", ["-F", "-n", "needle", "long.txt"]),
+    # one-pass regexes with capture groups (the one-pass DFA resolves them): a lazy group
+    # whose match wins over going on, a greedy one, an alternation, a word boundary
+    ("one-pass lazy group", ["-r", "[$1]", "l(p)??", "plain.txt"]),
+    ("one-pass greedy group", ["-r", "[$1|$2]", "(a)(l)?", "plain.txt"]),
+    ("one-pass alternation", ["-r", "<$1><$2>", "(g)amma|(d)elta", "plain.txt"]),
+    ("one-pass word boundary", ["-r", "<$1>", "\\b(\\w+) again", "plain.txt"]),
     ("many fixed strings, count", ["-F", "-c", "-f", "many_words.txt", "long.txt"]),
     ("many fixed strings, only matching", ["-F", "-o", "-n", "-f", "many_words.txt", "long.txt"]),
     ("many fixed strings, words", ["-F", "-w", "-c", "-f", "many_words.txt", "long.txt"]),

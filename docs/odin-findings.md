@@ -78,3 +78,18 @@ Windows `HeapReAlloc` copies them. The lazy DFA grew its transition table that w
 once the capacity doubles (`src/regex_dfa.odin`). The documented contract ("possibly
 `cap`") allows it, so it is a cost to know, not a wrong result; grepper reserves with
 doubling before such a `resize`.
+
+## 9. Narrow stores followed by a wide load of the same bytes
+
+With `-o:speed` (LLVM), two codegen shapes stall on store forwarding in a hot loop:
+- a struct whose first word holds two `i32` fields, written with two 4-byte stores (an
+  `append` of a struct literal) and read back with one 8-byte load (a `pop`);
+- a slice argument built from its pointer and length with two 8-byte stores and copied to the
+  argument area with one 16-byte `movups` load.
+
+The load cannot take its bytes from the pending stores and waits for them to retire. In the
+PikeVM's epsilon closure `perf annotate` put 26 % of the procedure on the instruction after
+the frame's load and 25 % of the step loop on the slice copy; with whole-word frames and the
+slices passed as pointer and length, `--dfa-size-limit 1K -c '\w{30}'` over 4 MiB went from
+549 to 354 ms on Linux (430eced). rustc's code for the same loop does not show it. A cost,
+not a wrong result; to compare with Clang on the equivalent C before reporting anything.

@@ -327,14 +327,40 @@ suffix_start :: proc(m: ^Matcher, h: []u8, start, end: int) -> (at: int, r: Dfa_
 	}
 }
 
-// Strategy::search_slots: with a strategy other than Core, its match narrows the span and
-// the engines with slots run from its start (they find the same match there: none starts
-// earlier)
+// Strategy::search_slots: the match's bounds first, from the lazy DFAs (Core) or the
+// strategy, then the engines with slots over that span alone, anchored at its start. The
+// reverse suffix and anchored strategies leave the end open (start..end), as upstream.
 @(private="file")
 find_slots :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
-	if m.strategy == .Core { return core_slots(m, hay, start, end) }
-	ms, _ := find_strategy(m, hay, start, end) or_return
-	return core_slots(m, hay, ms, end)
+	if !m.dfa_ok { return core_slots(m, hay, start, end) }
+	if m.strategy == .Core {
+		ds, de, r := find_dfa(m, hay[:end], start, end)
+		switch r {
+		case .No_Match: return
+		case .Quit: return core_slots(m, hay, start, end)
+		case .Match:
+		}
+		return slots_in_match(m, hay[:end], ds, de)
+	}
+	ms, me := find_strategy(m, hay, start, end) or_return
+	return slots_in_match(m, hay[:end], ms, me if m.strategy == .Reverse_Inner else end)
+}
+
+// the capture groups of the match known to start at ms and end by me (search_slots_nofail
+// with an anchored input): the backtracker when the span fits it, else the PikeVM, anchored.
+// The span ends at me, but the look-around still sees h beyond it. A higher-priority path
+// that would end past me already failed on the whole input, so cutting the span there does
+// not change the match
+@(private="file")
+slots_in_match :: proc(m: ^Matcher, h: []u8, ms, me: int) -> (s, e: int, ok: bool) {
+	found: bool
+	if me - ms <= m.bt_max {
+		found = backtrack_search(m.nfa, &m.bt, h, ms, me, m.slots)
+	} else {
+		found = pike_search(m.nfa, &m.cache, h, ms, me, true, m.slots)
+	}
+	assert(found, "the match the DFAs found must be found by the engines with slots")
+	return m.slots[0], m.slots[1], true
 }
 
 // the leftmost-first match and its capture groups in m.slots: the bounded backtracker when

@@ -191,14 +191,21 @@ Dir_Queue :: struct {
 	cond:        sync.Cond,
 	jobs:        [dynamic]Dir_Job,
 	outstanding: int,     // queued, plus taken and not finished
+	// threads in cond_wait: a push signals only when one waits. Odin's cond_signal makes a
+	// futex syscall every time, and with every file pushed that was ~6,700 futex calls on
+	// /usr/include against rg's ~115
+	waiting:     int,
 }
 
 dq_push :: proc(q: ^Dir_Queue, job: Dir_Job) {
 	sync.lock(&q.mu)
 	append(&q.jobs, job)
 	q.outstanding += 1
+	wake := q.waiting > 0
 	sync.unlock(&q.mu)
-	sync.cond_signal(&q.cond)
+	// a waiter counted itself under the lock and read the condition's state before
+	// releasing it, so this signal cannot fall between its check and its sleep
+	if wake { sync.cond_signal(&q.cond) }
 }
 
 // the next directory, or none once the walk is over
@@ -207,7 +214,9 @@ dq_pop :: proc(q: ^Dir_Queue) -> (job: Dir_Job, ok: bool) {
 	defer sync.unlock(&q.mu)
 	for len(q.jobs) == 0 {
 		if q.outstanding == 0 { return }
+		q.waiting += 1
 		sync.cond_wait(&q.cond, &q.mu)
+		q.waiting -= 1
 	}
 	return pop(&q.jobs), true
 }

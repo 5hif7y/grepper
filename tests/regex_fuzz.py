@@ -34,7 +34,7 @@ CLASSES = ["[a-c]", "[^a ]", "[A-Z]", "[0-9]", "[[:alpha:]]", "[\\w-]", "[é-ü]
            "[a-z&&[^aeiou]]", "\\w", "\\W", "\\d", "\\D", "\\s", "\\S", "\\pL", "\\p{Greek}",
            "\\p{Lu}", "\\PL", ".", "(?-u:\\w)", "(?-u:.)"]
 LOOKS = ["^", "$", "\\b", "\\B", "\\b{start}", "\\b{end}", "\\<", "\\>",
-         "\\b{start-half}", "\\b{end-half}",
+         "\\b{start-half}", "\\b{end-half}", "\\A", "\\z",
          # the ASCII forms: Unicode is on by default, so they need (?-u) to appear
          "(?-u:\\b)", "(?-u:\\B)", "(?-u:\\b{start})", "(?-u:\\b{end})", "(?-u:\\b{start-half})",
          "(?-u:\\b{end-half})"]

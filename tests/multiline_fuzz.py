@@ -24,7 +24,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 PATS = ["foo\\nbar", "a\\n", "\\nb", "(?s)a.*?c", "a[^x]*b", "^b", "c$", "(?m)^a$", "foo", "x*", "\\n\\n",
-        "o\\s+b", "[ab]\\n[bc]", "bar\\n?", "(?s).{3}", "\\w+\\n\\w+", "a|\\nc", "$", "^"]
+        "o\\s+b", "[ab]\\n[bc]", "bar\\n?", "(?s).{3}", "\\w+\\n\\w+", "a|\\nc", "$", "^",
+        # the meta engine's reverse strategies: anchored at the end (ReverseAnchored), a
+        # common suffix (ReverseSuffix) and an inner literal (ReverseInner)
+        "\\w+\\s*\\z", "(?s).\\z", "b\\n?\\z", "[a-c]\\z|x\\z",
+        "[a-z]+bar", "\\w+\\s+bar", "[a-c ]+ar", "\\s*a",
+        "\\w+\\s+bar\\s+\\w+", "[a-c]+\\nfoo\\s+[a-z]+", "\\w*o b\\w*", "(?s)a.*foo.*c"]
 OPTS = [[], ["-n"], ["-c"], ["--count-matches"], ["-o"], ["-o", "-n", "--column"], ["-v"], ["-n", "-A1"],
         ["-n", "-B1"], ["-C1", "-n"], ["-l"], ["-b", "-n"], ["--vimgrep"], ["-m1"], ["-m2", "-n"],
         ["--passthru"], ["--json"], ["-r", "<$0>"], ["--color", "always"], ["--multiline-dotall"],

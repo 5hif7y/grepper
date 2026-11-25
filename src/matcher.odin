@@ -9,6 +9,10 @@ import nvol "nvol:odin"
 // Anything else is a regex: the HIR compiled to a Thompson NFA, run by the PikeVM.
 Matcher_Kind :: enum { Empty, Literal, Literals, Pike }
 
+// regex-automata's meta strategy over the Core engines (meta/strategy.rs::new), tried in this
+// order: the reverse anchored, reverse suffix and reverse inner searches, else Core
+Meta_Strategy :: enum { Core, Reverse_Anchored }
+
 Matcher :: struct {
 	kind:     Matcher_Kind,
 	// grep-regex's line_terminator(): whether the searcher may run the regex over many lines
@@ -35,6 +39,7 @@ Matcher :: struct {
 	// grep-regex's fast line regex: inner literals every match contains, searched first to
 	// find a candidate line, which the regex then confirms (nil: none)
 	fast_line: ^Prefilter,
+	strategy:  Meta_Strategy,
 }
 
 // a worker's own copy: the memmem finders and the PikeVM's scratch change while searching
@@ -149,6 +154,12 @@ matcher_pike :: proc(h: ^Hir, pre: ^Prefilter) -> (m: Matcher) {
 	// regex-automata leaves the unanchored prefix out of an NFA anchored at the start
 	m.dfa_fwd = dfa_new(m.nfa, .Leftmost_First, !look_set_contains(h.props.look_set_prefix, .Start))
 	m.dfa_rev = dfa_new(m.nfa_rev, .All)
+	anchored_start := look_set_contains(h.props.look_set_prefix, .Start)
+	// ReverseAnchored::new: always anchored at the end (\z) and not at the start; the lazy
+	// DFAs are always there
+	if look_set_contains(h.props.look_set_suffix, .End) && !anchored_start {
+		m.strategy = .Reverse_Anchored
+	}
 	return
 }
 
@@ -166,10 +177,39 @@ find_dfa :: proc(m: ^Matcher, h: []u8, start, end: int) -> (s, e: int, r: Dfa_Re
 	return at, e, .Match
 }
 
+// The meta strategy's search (Strategy::search, unanchored) for a strategy other than Core:
+// the match, or the Core search when the fast one gives up
+@(private="file")
+find_strategy :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
+	switch m.strategy {
+	case .Core:
+	case .Reverse_Anchored:
+		// the only end a match can have is the end of the input: the reverse DFA, anchored
+		// there, finds the leftmost start
+		at, r := dfa_find_rev(&m.dfa_rev, hay[:end], start, end)
+		switch r {
+		case .Match: return at, end, true
+		case .No_Match: return
+		case .Quit: return core_slots(m, hay, start, end)
+		}
+	}
+	unreachable()
+}
+
+// Strategy::search_slots: with a strategy other than Core, its match narrows the span and
+// the engines with slots run from its start (they find the same match there: none starts
+// earlier)
+@(private="file")
+find_slots :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
+	if m.strategy == .Core { return core_slots(m, hay, start, end) }
+	ms, _ := find_strategy(m, hay, start, end) or_return
+	return core_slots(m, hay, ms, end)
+}
+
 // the leftmost-first match and its capture groups in m.slots: the bounded backtracker when
 // the span fits it, else the PikeVM, as the meta engine orders them for a search with slots
 @(private="file")
-find_slots :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
+core_slots :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 	if end - start <= m.bt_max {
 		if !backtrack_search(m.nfa, &m.bt, hay[:end], start, end, m.slots) { return }
 	} else if !pike_search(m.nfa, &m.cache, hay[:end], start, end, false, m.slots) {
@@ -272,6 +312,7 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 		}
 		return s, e, best >= 0
 	case .Pike:
+		if m.strategy != .Core { return find_strategy(m, hay, start, end) }
 		// Core::search without capture groups: the lazy DFAs, and the engines with slots
 		// when they give up
 		ds, de, r := find_dfa(m, hay[:end], start, end)
@@ -280,7 +321,7 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 		case .No_Match: return
 		case .Quit:
 		}
-		return find_slots(m, hay, start, end)
+		return core_slots(m, hay, start, end)
 	}
 	return
 }

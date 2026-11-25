@@ -111,6 +111,24 @@ Rx_NFA :: struct {
 	group_names: [dynamic]Maybe(string),
 	pre:         ^Prefilter,       // where a match may start, from the regex's prefixes (nil: none)
 	reverse:     bool,             // compiled to match backwards, without capture states
+	prog:        Pike_Prog,        // the PikeVM's compact copy of states (rx_finish)
+}
+
+// the states as the PikeVM reads them: 20 bytes each instead of Rx_State's 104, the sparse
+// transitions and the union alternatives in two flat pools (a state's run: [a, a + count))
+Pike_Op :: struct {
+	kind:   Rx_State_Kind,
+	lo, hi: u8,
+	look:   Look,
+	next:   i32,       // Range, Look, Capture
+	a:      i32,       // Sparse, Union: the run's start in the pool; Capture: the slot
+	count:  i32,
+}
+
+Pike_Prog :: struct {
+	ops:   []Pike_Op,
+	trans: []Rx_Trans,
+	alts:  []i32,
 }
 
 Rx_Ref :: struct { start, end: i32 }
@@ -554,6 +572,33 @@ c_at_least :: proc(n: ^Rx_NFA, sub: ^Hir, greedy: bool, count: u32) -> Rx_Ref {
 rx_finish :: proc(n: ^Rx_NFA) {
 	for &s, i in n.states {
 		if s.kind == .Union && s.slot == 1 { finish_union(n, i32(i)) }
+		// the PikeVM stops a sparse scan at the first range past the byte
+		if s.kind == .Sparse {
+			slice.sort_by(s.trans[:], proc(a, b: Rx_Trans) -> bool { return a.lo < b.lo })
+		}
+	}
+	nt, na := 0, 0
+	for s in n.states { nt += len(s.trans); na += len(s.alts) }
+	p := &n.prog
+	p.ops = make([]Pike_Op, len(n.states))
+	p.trans = make([]Rx_Trans, nt)
+	p.alts = make([]i32, na)
+	nt, na = 0, 0
+	for s, i in n.states {
+		op := Pike_Op{kind = s.kind, lo = s.lo, hi = s.hi, look = s.look, next = s.next}
+		#partial switch s.kind {
+		case .Sparse:
+			op.a, op.count = i32(nt), i32(len(s.trans))
+			copy(p.trans[nt:], s.trans[:])
+			nt += len(s.trans)
+		case .Union:
+			op.a, op.count = i32(na), i32(len(s.alts))
+			copy(p.alts[na:], s.alts[:])
+			na += len(s.alts)
+		case .Capture:
+			op.a = s.slot
+		}
+		p.ops[i] = op
 	}
 }
 
@@ -684,12 +729,19 @@ look_matches :: proc(l: Look, h: []u8, at: int) -> bool {
 
 Pike_Cache :: struct {
 	pre:    ^Prefilter,            // the NFA's prefilter, this cache's own copy
-	clist, nlist: [dynamic]i32,
-	cslots, nslots: [dynamic]int,      // per thread in the list: n.slots values
+	curr, next: Pike_List,
 	mark:   []u32,
 	gen:    u32,
 	stack:  [dynamic]Pike_Frame,
 	scratch: []int,
+}
+
+// ActiveStates: the threads in priority order, and the slot table, n.slots values per NFA
+// state (a state is at most once in a list, so its slots live at its own row)
+Pike_List :: struct {
+	ids:   []i32,
+	len:   int,
+	slots: []int,
 }
 
 Pike_Frame :: struct {
@@ -705,12 +757,26 @@ pike_cache_new :: proc(n: ^Rx_NFA) -> (c: Pike_Cache) {
 	return
 }
 
-// follow epsilon transitions from sid at position `at`, adding the threads reached to list
-// in priority order (a depth-first walk with the capture slots set and restored on the way)
+// the lists are made on the first search: most caches never run the PikeVM
 @(private="file")
-epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^[dynamic]i32, lslots: ^[dynamic]int, sid: i32, slots: []int, h: []u8, at: int) {
+pike_lists :: proc(n: ^Rx_NFA, c: ^Pike_Cache) {
+	if c.curr.ids != nil { return }
+	ns := len(n.states)
+	for l in ([]^Pike_List{&c.curr, &c.next}) {
+		l.ids = make([]i32, ns)
+		l.slots = make([]int, ns * n.slots)
+	}
+}
+
+// follow epsilon transitions from sid at position `at`, adding the threads reached to list
+// in priority order (a depth-first walk with the capture slots set and restored on the way,
+// so slots is as it was on return)
+@(private="file")
+epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^Pike_List, sid: i32, slots: []int, h: []u8, at: int) {
+	ns := len(slots)
+	prog := &n.prog
 	append(&c.stack, Pike_Frame{sid = sid, restore_slot = -1})
-	for len(c.stack) > 0 {
+	#no_bounds_check for len(c.stack) > 0 {
 		f := pop(&c.stack)
 		if f.restore_slot >= 0 {
 			slots[f.restore_slot] = f.restore_val
@@ -720,29 +786,31 @@ epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^[dynamic]i32, lslots:
 		for {
 			if c.mark[id] == c.gen { break }
 			c.mark[id] = c.gen
-			s := &n.states[id]
+			s := &prog.ops[id]
 			#partial switch s.kind {
 			case .Union:
-				if len(s.alts) == 0 { break }
-				#reverse for alt in s.alts[1:] { append(&c.stack, Pike_Frame{sid = alt, restore_slot = -1}) }
-				id = s.alts[0]
+				if s.count == 0 { break }
+				alts := prog.alts[s.a:][:s.count]
+				#reverse for alt in alts[1:] { append(&c.stack, Pike_Frame{sid = alt, restore_slot = -1}) }
+				id = alts[0]
 				continue
 			case .Look:
 				if !look_matches(s.look, h, at) { break }
 				id = s.next
 				continue
 			case .Capture:
-				if int(s.slot) < len(slots) {
-					append(&c.stack, Pike_Frame{restore_slot = s.slot, restore_val = slots[s.slot]})
-					slots[s.slot] = at
+				if int(s.a) < ns {
+					append(&c.stack, Pike_Frame{restore_slot = s.a, restore_val = slots[s.a]})
+					slots[s.a] = at
 				}
 				id = s.next
 				continue
 			case .Fail:
 				break
 			case:
-				append(list, id)
-				append(lslots, ..slots)
+				list.ids[list.len] = id
+				list.len += 1
+				if ns > 0 { copy(list.slots[int(id) * ns:][:ns], slots) }
 			}
 			break
 		}
@@ -752,14 +820,17 @@ epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^[dynamic]i32, lslots:
 // the leftmost-first match in h[start:end) (look-around sees all of h); slots get the
 // capture positions (slots[0], slots[1] the match)
 pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchored: bool, slots: []int) -> bool {
+	pike_lists(n, c)
 	ns := n.slots
-	clear(&c.clist); clear(&c.cslots)
+	prog := &n.prog
+	assert(len(prog.ops) == len(n.states), "rx_finish builds the PikeVM's program")
+	c.curr.len = 0
 	matched := false
 	for &x in slots { x = -1 }
 	for at := start; at <= end; at += 1 {
 		// no thread alive and no match yet: skip to where the prefilter says a match may
 		// start, as regex-automata's PikeVM does
-		if len(c.clist) == 0 && !matched && !anchored && c.pre != nil {
+		if c.curr.len == 0 && !matched && !anchored && c.pre != nil {
 			r, ok := prefilter_find(c.pre, h, at, end)
 			if !ok { break }
 			at = r.start
@@ -768,46 +839,44 @@ pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchor
 		if !matched && (!anchored || at == start) {
 			c.gen += 1
 			if c.gen == 0 { slice.fill(c.mark, 0); c.gen = 1 }
-			// threads already in clist keep their marks from this generation
-			for sid in c.clist { c.mark[sid] = c.gen }
+			// threads already in the list keep their marks from this generation
+			for sid in c.curr.ids[:c.curr.len] { c.mark[sid] = c.gen }
 			for &x in c.scratch { x = -1 }
-			epsilon_closure(n, c, &c.clist, &c.cslots, n.start, c.scratch[:ns], h, at)
+			epsilon_closure(n, c, &c.curr, n.start, c.scratch[:ns], h, at)
 		}
-		if len(c.clist) == 0 {
+		if c.curr.len == 0 {
 			if matched || anchored { break }
 			continue
 		}
 		c.gen += 1
 		if c.gen == 0 { slice.fill(c.mark, 0); c.gen = 1 }
-		clear(&c.nlist); clear(&c.nslots)
-		for sid, i in c.clist {
-			s := &n.states[sid]
-			tslots := c.cslots[i * ns:(i + 1) * ns]
+		c.next.len = 0
+		#no_bounds_check for sid in c.curr.ids[:c.curr.len] {
+			s := &prog.ops[sid]
+			tslots := c.curr.slots[int(sid) * ns:][:ns]
 			next: i32 = -1
 			#partial switch s.kind {
 			case .Match:
 				matched = true
 				copy(slots, tslots)
-				break      // lower priority threads are cut
 			case .Range:
 				if at < end && s.lo <= h[at] && h[at] <= s.hi { next = s.next }
 			case .Sparse:
 				if at < end {
+					// SparseTransitions::matches_byte: the ranges are sorted, so the scan
+					// stops at the first one past the byte
 					b := h[at]
-					for t in s.trans {
-						if t.lo <= b && b <= t.hi { next = t.next; break }
+					for t in prog.trans[s.a:][:s.count] {
+						if t.lo > b { break }
+						if b <= t.hi { next = t.next; break }
 					}
 				}
 			}
-			if s.kind == .Match { break }
-			if next >= 0 {
-				copy(c.scratch[:ns], tslots)
-				epsilon_closure(n, c, &c.nlist, &c.nslots, next, c.scratch[:ns], h, at + 1)
-			}
+			if s.kind == .Match { break }      // lower priority threads are cut
+			if next >= 0 { epsilon_closure(n, c, &c.next, next, tslots, h, at + 1) }
 		}
-		c.clist, c.nlist = c.nlist, c.clist
-		c.cslots, c.nslots = c.nslots, c.cslots
-		if len(c.clist) == 0 && matched { break }
+		c.curr, c.next = c.next, c.curr
+		if c.curr.len == 0 && matched { break }
 	}
 	return matched
 }

@@ -9,7 +9,7 @@ import nvol "nvol:odin"
 // Teddy, then a byte set. regex-automata's last resort, an Aho-Corasick automaton, is not
 // ported yet; a set Teddy refuses then gets no prefilter.
 
-Prefilter_Kind :: enum { Memchr, Memchr2, Memchr3, Memmem, Teddy, Byte_Set }
+Prefilter_Kind :: enum { Memchr, Memchr2, Memchr3, Memmem, Teddy, Byte_Set, Aho_Corasick }
 
 Prefilter :: struct {
 	kind:           Prefilter_Kind,
@@ -18,6 +18,7 @@ Prefilter :: struct {
 	needle_len:     int,
 	teddy:          nvol.Teddy,
 	set:            [256]bool,
+	ac:             ^Aho,       // read only once built: shared by the workers' copies
 	minimum_len:    int,
 	max_needle_len: int,
 }
@@ -59,7 +60,10 @@ prefilter_new :: proc(needles: [][]u8) -> (p: ^Prefilter, ok: bool) {
 			pre.kind = .Byte_Set
 			for n in needles { pre.set[n[0]] = true }
 		} else {
-			return
+			// the last choice: Aho-Corasick, leftmost-first (as AhoCorasick::new builds it,
+			// a DFA up to 500 needles and a contiguous NFA past that; both are this NFA here)
+			pre.kind = .Aho_Corasick
+			pre.ac = aho_build(needles) or_return
 		}
 	}
 	p = new(Prefilter)
@@ -79,7 +83,7 @@ prefilter_clone :: proc(p: ^Prefilter) -> ^Prefilter {
 // set is not, and Teddy only with needles of three bytes or more
 prefilter_is_fast :: proc(p: ^Prefilter) -> bool {
 	#partial switch p.kind {
-	case .Byte_Set: return false
+	case .Byte_Set, .Aho_Corasick: return false
 	case .Teddy: return p.minimum_len >= 3
 	}
 	return true
@@ -108,6 +112,8 @@ prefilter_find :: proc(p: ^Prefilter, h: []u8, start, end: int) -> (r: Range, ok
 		for b, i in hay {
 			if p.set[b] { return {start + i, start + i + 1}, true }
 		}
+	case .Aho_Corasick:
+		return aho_find(p.ac, h, start, end)
 	}
 	return
 }

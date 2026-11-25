@@ -23,6 +23,7 @@ Matcher :: struct {
 	finders:  []nvol.Memmem_Finder,
 	teddy:    nvol.Teddy,
 	teddy_ok: bool,
+	ac:       ^Aho,       // the literals when Teddy refuses them (read only, shared)
 	nfa:      ^Rx_NFA,
 	cache:    Pike_Cache,
 	slots:    []int,
@@ -86,17 +87,46 @@ matcher_literals :: proc(needles: []string) -> (m: Matcher) {
 		}
 	}
 	m.needles = needles
-	m.finders = make([]nvol.Memmem_Finder, len(needles))
-	for n, i in needles {
-		m.finders[i] = nvol.memmem_finder(transmute([]u8)n)
-	}
 	if len(needles) == 1 {
+		m.finders = make([]nvol.Memmem_Finder, 1)
+		m.finders[0] = nvol.memmem_finder(transmute([]u8)needles[0])
 		m.kind = .Literal
 		return
 	}
 	m.kind = .Literals
 	m.teddy, m.teddy_ok = nvol.teddy_build(needles)
+	if !m.teddy_ok {
+		// past Teddy (more than 64 needles, or a set it refuses): Aho-Corasick, as the
+		// prefilter choice falls back to it
+		bytes := make([][]u8, len(needles))
+		for n, i in needles { bytes[i] = transmute([]u8)n }
+		m.ac, _ = aho_build(bytes)
+	}
 	return
+}
+
+// meta::literal::alternation_literals: a regex that is an alternation of 3000 literals or
+// more, with no look-around and no captures, is searched by Aho-Corasick alone
+// (Pre::from_alternation_literals; below 3000, upstream's measurements favour the lazy DFA)
+@(private="file")
+alternation_literals :: proc(h: ^Hir) -> (lits: []string, ok: bool) {
+	if h.props.look_set != 0 || h.props.explicit_captures_len > 0 || !h.props.alternation_literal { return }
+	if h.kind != .Alternation || len(h.subs) < 3000 { return }
+	out := make([]string, len(h.subs))
+	for sub, i in h.subs {
+		b: [dynamic]u8
+		#partial switch sub.kind {
+		case .Literal: append(&b, ..sub.lit)
+		case .Concat:
+			for e in sub.subs {
+				assert(e.kind == .Literal, "an alternation literal holds literals only")
+				append(&b, ..e.lit)
+			}
+		case: unreachable()
+		}
+		out[i] = string(b[:])
+	}
+	return out, true
 }
 
 // regex-automata's meta strategy for one regex, as far as grepper has its engines: the
@@ -110,7 +140,14 @@ matcher_from_hir :: proc(h: ^Hir) -> (m: Matcher) {
 	prefixes := extractor_extract(&e, h)
 	seq_optimize_for_prefix_by_preference(&prefixes)
 	lits, finite := seq_literals(prefixes)
-	if !finite { return matcher_pike(h, nil) }
+	if !finite {
+		if alts, ok := alternation_literals(h); ok {
+			m = matcher_literals(alts)
+			m.non_matching = non_matching_bytes(h)
+			return m
+		}
+		return matcher_pike(h, nil)
+	}
 	needles := make([][]u8, len(lits))
 	for l, i in lits { needles[i] = l.bytes[:] }
 	pre, built := prefilter_new(needles)
@@ -509,14 +546,8 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 			t := nvol.teddy_find_in(&m.teddy, hay, start, end) or_return
 			return t.start, t.end, true
 		}
-		best := -1
-		for _, k in m.needles {
-			i, found := nvol.memmem_find(&m.finders[k], hay[start:end])
-			if found && (best < 0 || start + i < s) {
-				best, s, e = k, start + i, start + i + len(m.needles[k])
-			}
-		}
-		return s, e, best >= 0
+		r := aho_find(m.ac, hay, start, end) or_return
+		return r.start, r.end, true
 	case .Pike:
 		if m.strategy != .Core { return find_strategy(m, hay, start, end) }
 		return core_find(m, hay, start, end)

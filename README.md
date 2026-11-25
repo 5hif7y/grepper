@@ -5,7 +5,8 @@ A recursive line-oriented search tool in [Odin](https://odin-lang.org): a port o
 [NVOL](https://github.com/mirai-engine/NVOL), a generator of verified SIMD kernels.
 
 **Status: pre-alpha.** The vertical MVP is done; the 1:1 port of ripgrep 14.1.1 is under way,
-crate by crate. [docs/PARITY.md](docs/PARITY.md) lists every ripgrep flag and its status.
+crate by crate. [docs/PARITY.md](docs/PARITY.md) lists every ripgrep flag and its status;
+[docs/GLOSSARY.md](docs/GLOSSARY.md) describes every algorithm grepper runs.
 
 ## Goal
 

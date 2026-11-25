@@ -246,6 +246,11 @@ state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32, unanchored := false,
 	append(&d.states, st)
 	d.mem += state_cost(len(seeds))
 	base := len(d.trans)
+	// Odin's resize grows the capacity to exactly the new length: one row at a time it
+	// reallocated the whole table per state (quadratic; glibc's realloc moves the pages with
+	// mremap, Windows' HeapReAlloc copies them: `-c 'Holmes.{0,40}Watson'` over 8 MiB took
+	// 1763 ms against rg's 137). The capacity doubles instead
+	if base + DFA_STRIDE > cap(d.trans) { reserve(&d.trans, max(base + DFA_STRIDE, 2 * cap(d.trans))) }
 	resize(&d.trans, base + DFA_STRIDE)
 	for k in base ..< base + DFA_STRIDE { d.trans[k] = DFA_UNKNOWN }
 	id := i32(len(d.states) - 1)

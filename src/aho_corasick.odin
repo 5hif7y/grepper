@@ -126,6 +126,8 @@ aho_build :: proc(patterns: [][]u8) -> (a: ^Aho, ok: bool) {
 	for &st, sid in a.states {
 		if sid < int(AC_START) || st.depth >= AC_DENSE_DEPTH { continue }
 		row := len(a.dense)
+		// doubling, not one row at a time (Odin's resize sets the capacity to the length)
+		if row + 256 > cap(a.dense) { reserve(&a.dense, max(row + 256, 2 * cap(a.dense))) }
 		resize(&a.dense, row + 256)
 		for k in row ..< row + 256 { a.dense[k] = AC_FAIL }
 		for t in st.sparse { a.dense[row + int(t.b)] = t.next }

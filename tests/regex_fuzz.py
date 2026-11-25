@@ -2,7 +2,10 @@
 text of ASCII, Unicode (case folding traps included), CRLF lines and invalid UTF-8, comparing
 `-o -n --column` (every match's position and text) and the exit code byte for byte.
 
-    python tests/regex_fuzz.py [-n COUNT] [--seed SEED] [--grepper PATH] [--rg PATH]
+    python tests/regex_fuzz.py [-n COUNT] [--seed SEED] [--no-lazy-dfa] [--grepper PATH] [--rg PATH]
+
+--no-lazy-dfa adds --dfa-size-limit 1K to every search: no lazy DFA fits, so the searches run
+on the PikeVM and the bounded backtracker (rg: also its full DFA, for small regexes).
 
 A pattern ripgrep rejects is compared on stderr instead (program name aside)."""
 import argparse
@@ -89,7 +92,9 @@ def main():
     ap.add_argument("--rg", default=shutil.which("rg"))
     ap.add_argument("-n", type=int, default=300)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--no-lazy-dfa", action="store_true")
     a = ap.parse_args()
+    extra = ["--dfa-size-limit", "1K"] if a.no_lazy_dfa else []
     r = random.Random(a.seed)
     fd, path = tempfile.mkstemp(suffix=".txt")
     os.write(fd, TEXT)
@@ -104,6 +109,7 @@ def main():
                 # the capture groups, through -r: each group's text as the regex crate has it
                 # (not with --crlf, where rg 14.1.1 turns a bare \n into \r\n: RG_BUGS U3100)
                 args = opts + ["-n", "-r", "<$0|$1|$2|$3>", "-e", pat]
+            args = extra + args
             g = run(a.grepper, args, path)
             rg = run(a.rg, args, path)
             if rg[0] == 2:
@@ -117,7 +123,8 @@ def main():
                 print(f"  rg      rc={rg[0]} {rg[1][:300]!r} {rg[2][:200]!r}")
     finally:
         os.remove(path)
-    print(f"{a.n - bad}/{a.n} patterns match rg (seed {a.seed})")
+    mode = ", no lazy DFA" if a.no_lazy_dfa else ""
+    print(f"{a.n - bad}/{a.n} patterns match rg (seed {a.seed}{mode})")
     return 1 if bad else 0
 
 

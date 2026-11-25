@@ -158,7 +158,7 @@ worker_search :: proc(w: ^Worker, hay: Haystack) -> (has_match: bool, err: Maybe
 		defer delete(data)
 		multi_line_search(&w.searcher, &w.m, data, &sink)
 	} else if hay.is_stdin {
-		lb := Line_Buffer{handle = os.stdin, binary = w.searcher.binary, lineterm = w.searcher.line_term}
+		lb := Line_Buffer{handle = hay_stdin(), binary = w.searcher.binary, lineterm = w.searcher.line_term}
 		lb.buf = make([dynamic]u8, DEFAULT_BUFFER_CAPACITY)
 		defer delete(lb.buf)
 		if e := read_by_line(&w.searcher, &w.m, &lb, &sink); e != nil {
@@ -167,9 +167,9 @@ worker_search :: proc(w: ^Worker, hay: Haystack) -> (has_match: bool, err: Maybe
 	} else {
 		// search_file_maybe_path: a memory map when ripgrep would map (and the file maps);
 		// otherwise reads, 64 KiB at a time, or the whole file for multi line mode
-		f, e := os.open(hay.path)
+		f, e := hay_open(hay.path)
 		if e != nil { return false, os_error_message(e) }
-		defer os.close(f)
+		defer hay_close(f)
 		mapped := false
 		if w.searcher.mmap {
 			if mp, ok := map_file(f); ok {
@@ -184,7 +184,7 @@ worker_search :: proc(w: ^Worker, hay: Haystack) -> (has_match: bool, err: Maybe
 		}
 		if !mapped {
 			if multi_line_with_matcher(&w.searcher, &w.m) {
-				data, re := os.read_entire_file(f, context.allocator)
+				data, re := hay_read_all(f, context.allocator)
 				if re != nil { return false, os_error_message(re) }
 				defer delete(data)
 				multi_line_search(&w.searcher, &w.m, data, &sink)

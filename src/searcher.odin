@@ -40,7 +40,7 @@ Line_Buffer :: struct {
 	base:     int,
 	cap:      int,
 	buf:      [dynamic]u8,
-	handle:   ^os.File,
+	handle:   Hay_File,
 	eof_seen: bool,
 
 	pos, last_lineterm, end: int,
@@ -95,7 +95,7 @@ lb_read :: proc(lb: ^Line_Buffer) -> (n: int, err: os.Error) {
 		resize(&lb.buf, len(lb.buf) + max(1, len(lb.buf)) * 2)
 	}
 	if lb.eof_seen { return 0, nil }
-	n, err = os.read(lb.handle, lb.buf[lb.end:])
+	n, err = hay_read(lb.handle, lb.buf[lb.end:])
 	if err == .EOF || err == .Broken_Pipe { err = nil }
 	if n == 0 { lb.eof_seen = true }
 	return

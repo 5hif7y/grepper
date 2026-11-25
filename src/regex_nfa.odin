@@ -744,10 +744,12 @@ Pike_List :: struct {
 	slots: []int,
 }
 
+// FollowEpsilon: explore state `op`, or (op < 0) put val back into slot -op - 1. Two words,
+// written and read whole: with an i32 pair in the first word, Odin stores them apart and
+// loads them as one, and the load waits for the stores to retire (no store forwarding)
 Pike_Frame :: struct {
-	sid:          i32,
-	restore_slot: i32,     // >= 0: put restore_val back into this slot
-	restore_val:  int,
+	op:  int,
+	val: int,
 }
 
 pike_cache_new :: proc(n: ^Rx_NFA) -> (c: Pike_Cache) {
@@ -772,17 +774,16 @@ pike_lists :: proc(n: ^Rx_NFA, c: ^Pike_Cache) {
 // in priority order (a depth-first walk with the capture slots set and restored on the way,
 // so slots is as it was on return)
 @(private="file")
-epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^Pike_List, sid: i32, slots: []int, h: []u8, at: int) {
-	ns := len(slots)
+epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^Pike_List, sid: i32, slots_ptr: [^]int, ns: int, h_ptr: [^]u8, h_len: int, at: int) {
+	// the slots and the haystack come as pointers and lengths: a slice argument is built in
+	// two stores and copied in one load, the same stall as the frames'
+	slots := slots_ptr[:ns]
+	h := h_ptr[:h_len]
 	prog := &n.prog
-	append(&c.stack, Pike_Frame{sid = sid, restore_slot = -1})
-	#no_bounds_check for len(c.stack) > 0 {
-		f := pop(&c.stack)
-		if f.restore_slot >= 0 {
-			slots[f.restore_slot] = f.restore_val
-			continue
-		}
-		id := f.sid
+	base := len(c.stack)
+	// the first state is explored without a trip through the stack
+	id := sid
+	#no_bounds_check for {
 		for {
 			if c.mark[id] == c.gen { break }
 			c.mark[id] = c.gen
@@ -791,7 +792,7 @@ epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^Pike_List, sid: i32, 
 			case .Union:
 				if s.count == 0 { break }
 				alts := prog.alts[s.a:][:s.count]
-				#reverse for alt in alts[1:] { append(&c.stack, Pike_Frame{sid = alt, restore_slot = -1}) }
+				#reverse for alt in alts[1:] { append(&c.stack, Pike_Frame{op = int(alt)}) }
 				id = alts[0]
 				continue
 			case .Look:
@@ -800,7 +801,7 @@ epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^Pike_List, sid: i32, 
 				continue
 			case .Capture:
 				if int(s.a) < ns {
-					append(&c.stack, Pike_Frame{restore_slot = s.a, restore_val = slots[s.a]})
+					append(&c.stack, Pike_Frame{op = -int(s.a) - 1, val = slots[s.a]})
 					slots[s.a] = at
 				}
 				id = s.next
@@ -813,6 +814,13 @@ epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^Pike_List, sid: i32, 
 				if ns > 0 { copy(list.slots[int(id) * ns:][:ns], slots) }
 			}
 			break
+		}
+		// the next frame: restore the slots it passes, until a state to explore
+		for {
+			if len(c.stack) == base { return }
+			f := pop(&c.stack)
+			if f.op >= 0 { id = i32(f.op); break }
+			slots[-f.op - 1] = f.val
 		}
 	}
 }
@@ -842,7 +850,7 @@ pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchor
 			// threads already in the list keep their marks from this generation
 			for sid in c.curr.ids[:c.curr.len] { c.mark[sid] = c.gen }
 			for &x in c.scratch { x = -1 }
-			epsilon_closure(n, c, &c.curr, n.start, c.scratch[:ns], h, at)
+			epsilon_closure(n, c, &c.curr, n.start, raw_data(c.scratch), ns, raw_data(h), len(h), at)
 		}
 		if c.curr.len == 0 {
 			if matched || anchored { break }
@@ -854,6 +862,7 @@ pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchor
 		#no_bounds_check for sid in c.curr.ids[:c.curr.len] {
 			s := &prog.ops[sid]
 			tslots := c.curr.slots[int(sid) * ns:][:ns]
+			tptr := raw_data(c.curr.slots)[int(sid) * ns:]
 			next: i32 = -1
 			#partial switch s.kind {
 			case .Match:
@@ -873,7 +882,7 @@ pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchor
 				}
 			}
 			if s.kind == .Match { break }      // lower priority threads are cut
-			if next >= 0 { epsilon_closure(n, c, &c.next, next, tslots, h, at + 1) }
+			if next >= 0 { epsilon_closure(n, c, &c.next, next, tptr, ns, raw_data(h), len(h), at + 1) }
 		}
 		c.curr, c.next = c.next, c.curr
 		if c.curr.len == 0 && matched { break }

@@ -127,7 +127,7 @@ recorded here as such.
 |---|---|---|---|
 | #1332 #3001 | `rg -vf file` with an empty `file` should match every line | patterns | fixed, also under `-i`/`-S`, where 16.0.0 still prints nothing |
 | regex #1354 (regex 1.13.1, regex-automata 0.4.18) | the reverse suffix (and reverse inner) search reports the first literal candidate it confirms, even when a match starting earlier ends at a later one: `rg -o '[a-c][^
-]*xz|z'` on `a z xz` prints `z` twice, where the leftmost-first match is `a z xz` (rg 16.0.0 prints `a z xz`) | regex | fixed: the strategy is used only when regex-automata 0.4.18's proofs hold (`src/meta_prefix.odin`, its unit tests in `src/meta_prefix_test.odin`); like 0.4.18 they are conservative, so `-U '[A-Z][a-z]+Error'` keeps the Core search (rg 14.1.1 800 ms, rg 16.0.0 1684 ms, grepper 1547 ms on the 524 MiB file) |
+]*xz|z'` on `a z xz` prints `z` twice, where the leftmost-first match is `a z xz` (rg 16.0.0 prints `a z xz`) | regex | fixed: both strategies are used only when regex-automata 0.4.18's proofs hold (`src/meta_prefix.odin`, `src/meta_reverse_inner.odin`, unit tests in `src/meta_prefix_test.odin`; regex's own 20 regression tests for them in `tests/regex_regression.py`: grepper 39/39 searches, rg 14.1.1 19/39); like 0.4.18 the proofs are conservative, so `-U '[A-Z][a-z]+Error'` keeps the Core search (rg 14.1.1 800 ms, rg 16.0.0 1684 ms, grepper 1547 ms on the 524 MiB file) |
 | #2177 | a UTF-8 BOM at the start of `.gitignore` (and the other ignore files) is part of the first pattern | ignore | fixed |
 | #2944 | `--stats` "bytes searched" can be wrong | printer | fixed |
 | #2990 | globs ending in `.` are mishandled | globset | fixed |
@@ -176,24 +176,24 @@ end
 ' > m; rg -U -v -n -m1 'foo
 bar' m` prints lines 1, 4, 5, 6 and 7; 14.1.1 prints `1:start` | prints `1:start`, as 14.1.1 |
 
-## Pending (regenerated 2026-11-24)
+## Pending (regenerated 2026-11-24, after P2)
 
 Every SIMD step is an NVOL kernel: written and tested in NVOL first (against its interpreter,
 benchmarked against the crate it replaces), then used here. "NVOL: has" names a kernel NVOL
-already ships; "NVOL: new" one to write there. The order is the order of work.
+already ships; "NVOL: new" one to write there. The order is the order of work. Items finished
+since the previous list are under "Done" at the end, with their commits.
 
-### 1. Speed: beat rg on every row of `tests/bench.py`
+### 1. Speed: beat rg on every row of `tests/bench.py`, and in `-U`
 
 | # | Item | NVOL |
 |---|---|---|
-| P1 | literal extraction for regexes (regex-syntax's `Extractor`: prefixes, suffixes, inner literals) and regex-automata's prefilter choice, so a regex with a literal is searched by a literal kernel first | has: memchr, memchr2, memchr3, memmem, Teddy; new: Rabin-Karp for sets Teddy refuses (scalar, kept in NVOL with the rest of the family) |
-| P2 | the reverse-suffix and reverse-inner strategies (a literal found, then the regex run backwards from it) | new: reverse memmem (NVOL PENDING item 40) |
-| P3 | accelerated DFA states: a state that loops on itself except for one to three bytes skips ahead with memchr. regex-automata does it in its dense DFAs, not in the lazy one, so this goes past rg | done: `^\s*$` 1686 -> 770 ms on the 523 MiB file (rg ~820) |
-| P4 | the lazy DFA in multi line mode (today `-U` runs on the PikeVM alone), and the cache size limits (`--dfa-size-limit`) | partial: `-U` finds match positions with a forward leftmost-first and a reverse lazy DFA (`-U -c 'fn\s+\w+\s*\('` 110670 -> 452 ms on the 523 MiB file, rg 501); the cache size limits remain |
-| P5 | the one-pass DFA and the bounded backtracker for capture groups (`-o`, `-r`, colours), as regex-automata's meta engine picks them | partial: the bounded backtracker is in (`-o -i '[a-z]+ing\b'` 2444 -> 1359 ms on the 523 MiB file, rg 616); positions without captures from a forward leftmost-first and a reverse lazy DFA, as the meta engine's Core::search finds them (`-o -i '[a-z]+ing\b'` 1238 -> 474 ms, rg 552), the backtracker and PikeVM only for capture groups or when a DFA quits; the one-pass DFA remains |
-| P0 | real file input: a memory map (MapViewOfFile, mmap) where ripgrep maps, and reads of 64 KiB at a time otherwise | done: on one 523 MiB file `-l` went from 240 to 18 ms (rg 44). Open: rows that scan the whole mapped file pay its page faults (~310 ms, rg ~336); reading it whole took ~278 ms but changes binary detection, so a faster way to fault the map in (a prefetch ahead of the search) is still to try | none |
-| P6 | the benchmark again after P1-P5, on Windows and Linux, best of several idle runs; a row slower than rg is a pending item of its own | partial: Unix lists directories with readdir (no stat per entry) and the walk is parallel (a shared directory stack, as WalkParallel). Windows, the Research-LLOG tree (30,457 files): 0.46-0.53 of rg on every row. Linux trees (/usr/include, /usr/share) remain 1.5-1.9x slower on most rows, and the single file's 8 literals (~2.0x) and `-i` (1.3-1.9x) rows too: P7 |
-| P7 | the Linux gaps P6 left: the tree rows (where the time goes per directory and per file, against rg under perf) and the single file's output-heavy rows (page faults, `clear_page` and the heap allocator in the first profile) | partial: stdout streamed on one thread (8 literals: 116,228 -> 916 page faults, rg 971; CPU 299 ms vs rg 279, 5 runs); files searched on the thread that walks them (`/usr/share -j1 -F zq_never_here_7` 778 -> 336 ms, rg ~290; `--files` 29 ms vs rg 38). With 4 threads one large directory ran on one thread (`man/man3`: 9,790 of 26,398 files); files now go on the shared stack as in WalkParallel (`/usr/share -F zq_never_here_7` minimum 147 -> 133 ms). Per file on Unix: no readlink of `/proc/self/fd/N` (Odin's `os.open` makes one; 8,904 on `/usr/include`) and no clock read without `--stats`; the stack signals only when a thread waits (futex calls ~6,700 -> 1,517, rg 618). After these, 15 alternating runs put grepper's minimum below rg's on every tree row tried, at `-j1` and with 4 threads (`/usr/share -j1 -F zq_never_here_7` 202 ms vs rg 276; 4 threads 87 vs 104). Left: the full `tests/bench.py` again on a quiet host, row by row; and one Windows run of `-j8 -c -F return` over the Research-LLOG tree that passed a 30 s timeout once in 30 runs and never again in 660 runs of this and the previous build (watch for a hang). Tried without effect: taking the output lock only for files with output | none |
+| P6 | the full `tests/bench.py` again, Windows and Linux, on a quiet host (the last runs were noisy: rg itself moved 2x between runs), row by row against rg 14.1.1 and 16.0.0; a row slower than rg becomes an item of its own | none |
+| P8 | proofs past regex 1.13.1's for the reverse strategies. Its proofs are sound but refuse safe patterns: `-U -c '[A-Z][a-z]+Error'` keeps the Core search (grepper 1135 ms on Linux, 1547 on Windows; rg 14.1.1 57 / 800 through its unsound strategy; rg 16.0.0 1684 on Windows), and `strip_literal_suffix` stops at a trailing look (`\s+Watson\b`). A stronger proof (for instance: the suffix's first byte can only be consumed by the prefix's first child) must come with a counterexample search, `tests/regex_regression.py` and the fuzzers before it is trusted. This goes past rg 16.0.0 | none |
+| P5 | the one-pass DFA for capture groups (`-o`, `-r`, colours with groups), as the meta engine picks it before the backtracker | none |
+| P4 | the cache size limits of the lazy DFAs (`--dfa-size-limit`), with F5's `--regex-size-limit` | none |
+| P1 | Aho-Corasick (or Rabin-Karp) for literal sets Teddy refuses (more than 64 patterns, or too short), where regex-automata falls back to it | new: Rabin-Karp for sets Teddy refuses (scalar, kept in NVOL with the rest of the family) |
+| P0 | rows that scan a whole mapped file pay its page faults (~310 ms on the 523 MiB file, rg ~336); a prefetch ahead of the search, without changing binary detection | none |
+| P9 | the hang to watch: one Windows run of `-j8 -c -F return` over the Research-LLOG tree passed a 30 s timeout once in 30 runs (a66f938's stress test) and never again in 660 runs of that and the previous build. A stress script run over many runs after each change to the walk's stack, with a dump of the threads on a timeout | none |
 
 ### 2. Features of rg 14.1.1 still missing
 
@@ -204,19 +204,20 @@ already ships; "NVOL: new" one to write there. The order is the order of work.
 | F3 | decompression through external tools, with #3342 (magic numbers) and #3222 (flags apart from paths) | `-z` | none |
 | F4 | preprocessors | `--pre --pre-glob` | none |
 | F5 | the regex size limit, and `--engine` | `--regex-size-limit --engine` | none |
-| F6 | PCRE2, with #3503 | `-P --pcre2-version` | depends on decision D1 |
+| F6 | PCRE2's features on grepper's own engine (D1): look-around, backreferences, the PCRE syntax and its errors, with #3503 | `-P --pcre2-version` | new: whatever SIMD steps the ported features need |
 | F7 | hyperlinks | `--hyperlink-format --hostname-bin` | none |
 | F8 | skipping the file stdout is redirected to, with #3617 | | none |
-| F9 | the `--debug` and `--trace` logs | `--debug --trace` | none |
+| F9 | the `--debug` and `--trace` logs (they would also show the meta strategy chosen, which today needs a debug build) | `--debug --trace` | none |
 | F10 | rg's exact help and version text, the man page and the completions | `-h --help -V --generate` | none |
+| F11 | the flags rg added after 14.1.1, under grepper's own names (D2) | per flag | none |
 
 ### 3. rg bugs waiting on something (section 6)
 
 | # | Bug | Waits on |
 |---|---|---|
-| W1 | #3609 | a Linux run (T2) |
+| W1 | #3609 | nothing now: the Linux runs exist (WSL Arch); to reproduce and fix |
 | W2 | #2958 | a console harness (T3) |
-| W3 | #2552, #3534 | symlinks: directory junctions on this account, or Linux (T2) |
+| W3 | #2552, #3534 | nothing now on Linux (symlinks work there); still directory junctions on Windows |
 | W4 | #3382 | a test that makes a read fail mid-search |
 | W5 | B5 (relative `..` paths against `--ignore-file`) | a fix of grepper's own: rg 16.0.0 has it too |
 
@@ -224,14 +225,35 @@ already ships; "NVOL: new" one to write there. The order is the order of work.
 
 | # | Item |
 |---|---|
-| T1 | `-L` and `--one-file-system` cases (ported, untested) |
-| T2 | the whole suite and the benchmark on Linux (WSL Arch), and the Unix-only paths |
+| T1 | `-L` and `--one-file-system` cases, on Linux where symlinks and mounts can be made (ported, untested) |
 | T3 | a console harness for what rg does only on a terminal (#2958, colour defaults) |
-| T4 | the fuzzers (`regex_fuzz.py`, `multiline_fuzz.py`, `line_paths.py`) run over more seeds in one go |
+| T4 | the fuzzers (`regex_fuzz.py`, `multiline_fuzz.py`, `line_paths.py`) over more seeds in one go, and patterns aimed at each meta strategy in `regex_fuzz.py` too (its `\z` patterns rarely reach a search that prints positions) |
+| T5 | more of regex's own testdata through `tests/regex_regression.py`: the other strategies' regression tests, and the tests with options (match kind, Unicode off) that grepper can express as flags |
+| T6 | `tests/linux_suite.sh` in the repository: the Linux run lives in a scratch script today (copy, build, every suite, the Odin unit test) |
 
-### 5. Decisions
+### 5. Local notes for upstream (sent only when grepper and NVOL are finished)
+
+| # | Project | Note |
+|---|---|---|
+| N1 | Odin | `os.open` on Linux fills `File.name` with readlink of `/proc/self/fd/N` on every open (`core/os/file_linux.odin`, `_new_file` -> `_get_full_path`): one syscall per file that a caller may never use (8,904 on `/usr/include`); grepper opens with `open(2)` itself (5243715) |
+| N2 | Odin | `sync.cond_signal` makes a futex syscall on every call, waiters or not (`core/sync/primitives_atomic.odin`); grepper counts its waiters (a66f938) |
+| N3 | ripgrep | B6 (the two forms of a missing root's error) and B2's race seen again (`-l alpha sub d1` loses `sub/deep/` in 41 of 100 runs at `-j4`) |
+
+### 6. Decisions
 
 | # | Question |
 |---|---|
 | D1 | **Decided 2026-11-24:** nothing external. PCRE2's features are ported onto grepper's own engine, and every SIMD step they need is written in NVOL; no C library is linked |
 | D2 | **Decided 2026-11-24:** the flags rg added after 14.1.1 (`--in`, `-G/--glob-not`, `RIPGREP_THREADS`, `--max-bytes`, POSIX classes in globs, jj repositories, `GIT_CONFIG_GLOBAL`) are taken where useful, under names of grepper's own: generic where possible, and never naming grepper or ripgrep (an environment variable such as `RIPGREP_THREADS` gets a generic name). Each is decided when it is ported |
+
+### Done since the list of 2026-11-24
+
+| # | What | Commits |
+|---|---|---|
+| P2 | regex-automata's three reverse strategies, ported from 0.4.18 with regex 1.13.1's soundness proofs (rust-lang/regex#1354; ripgrep 14.1.1's versions report wrong matches: section 6). They find the literal with the forward prefilter and run only the DFA backwards, so P2 needed no reverse memmem from NVOL (the previous list said it did). ReverseAnchored (`\z`): `-U -c '[a-z]+\n\z'` 1412 -> 19 ms (rg 50), `-c '[a-z]+\z'` 1607 -> 713 (rg 948). ReverseSuffix: `-U -c '\s+Holmes'` 2105 -> 769 (rg 869, rg 16.0.0 811). ReverseInner: `-U -c '[a-z]+_parse_[a-z]+'` 1300 -> 307 (rg 337, rg 16.0.0 306). Also the fast line path under `-U` for a regex that cannot match a newline: `-U -c '[0-9]ms'` 392 -> 71 ms on Linux (rg 72) | fac79a4, dae29e5, f7250c8, 935bca6, 349c3c5 |
+| P3 | accelerated lazy DFA states: `^\s*$` 1686 -> 770 ms on the 523 MiB file (rg ~820) | earlier |
+| P4 (part) | the lazy DFA in multi line mode: `-U -c 'fn\s+\w+\s*\('` 110670 -> 452 ms (rg 501) | earlier |
+| P5 (part) | the bounded backtracker, and positions from the lazy DFAs as Core::search finds them: `-o -i '[a-z]+ing\b'` 2444 -> 474 ms (rg 552) | earlier |
+| P0 (part) | memory maps where rg maps, 64 KiB reads otherwise: `-l` on one 523 MiB file 240 -> 18 ms (rg 44) | earlier |
+| P6/P7 | the walk on Linux: readdir without a stat per entry, a parallel walk with every entry on a shared stack (files too, as WalkParallel), files searched on the thread that finds them, stdout streamed on one thread, no readlink per open, no clock read per file without `--stats`, the stack signalled only when a thread waits. 15 alternating runs: grepper's minimum below rg's on every tree row tried (`/usr/share -j1 -F zq_never_here_7` 202 ms vs rg 276; 4 threads 87 vs 104). Two bugs found on the way and fixed: `.gitignore` rules lost at `-j4` (a freed path), and given files not searched at `-j>1` (abca4f8) | d46589c, 75c4fd7, 6cbd6ff, abca4f8, 051ac86, 5243715, 12ebf93, a66f938 |
+| T2 | the whole suite and the benchmark on Linux (WSL Arch, rg 14.1.1 built with PCRE2) | runs with each commit since d46589c |

@@ -187,7 +187,7 @@ since the previous list are under "Done" at the end, with their commits.
 
 | # | Item | NVOL |
 |---|---|---|
-| P6 | the full `tests/bench.py` again, Windows and Linux, on a quiet host (the last runs were noisy: rg itself moved 2x between runs), row by row against rg 14.1.1 and 16.0.0; a row slower than rg becomes an item of its own | none |
+| P6 | **debt (2026-11-25, the maintainer's call: the host is busy with other work, so a full benchmark now would not be clean).** The full `tests/bench.py` again, Windows and Linux, on a quiet host (the last runs were noisy: rg itself moved 2x between runs), row by row against rg 14.1.1 and 16.0.0; a row slower than rg becomes an item of its own. Until then each speed item is measured by alternating builds and taking the minimum, its noise noted | none |
 | P8 | proofs past regex 1.13.1's for the reverse strategies. Its proofs are sound but refuse safe patterns: `-U -c '[A-Z][a-z]+Error'` keeps the Core search (grepper 1135 ms on Linux, 1547 on Windows; rg 14.1.1 57 / 800 through its unsound strategy; rg 16.0.0 1684 on Windows), and `strip_literal_suffix` stops at a trailing look (`\s+Watson\b`). A stronger proof (for instance: the suffix's first byte can only be consumed by the prefix's first child) must come with a counterexample search, `tests/regex_regression.py` and the fuzzers before it is trusted. This goes past rg 16.0.0 | none |
 | P5 | the one-pass DFA for capture groups (`-o`, `-r`, colours with groups), as the meta engine picks it before the backtracker | none |
 | P4 | the cache size limits of the lazy DFAs (`--dfa-size-limit`), with F5's `--regex-size-limit` | none |

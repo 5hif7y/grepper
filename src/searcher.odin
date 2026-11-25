@@ -410,11 +410,16 @@ core_count_lines :: proc(c: ^Core, buf: []u8, upto: int) {
 core_is_line_by_line_fast :: proc(c: ^Core) -> bool {
 	if c.s.passthru { return false }
 	if c.s.stop_on_nonmatch && c.has_matched { return false }
-	if !c.m.line_term { return false }
-	// the matcher's line terminator: \n (ripgrep sets it outside multi line mode); NUL
-	// (--null-data) disables the fast path, as ripgrep's FIXME
-	if c.s.line_term == 0 { return false }
-	return c.s.line_term == '\n'
+	if c.m.line_term {
+		// the matcher's line terminator: \n (ripgrep sets it outside multi line mode); NUL
+		// (--null-data) disables the fast path, as ripgrep's FIXME
+		if c.s.line_term == 0 { return false }
+		if c.s.line_term == '\n' { return true }
+	}
+	// no line terminator (-U): still fast when no match can contain the searcher's line
+	// terminator. Without this branch `-U -c '[0-9]ms'` ran the slow path, one is_match per
+	// line: 381-1042 ms on Linux where rg takes 70-103
+	return c.m.non_matching[c.s.line_term]
 }
 
 // ---------------------------------------------------------------------------------------------

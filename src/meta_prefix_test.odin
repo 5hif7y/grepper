@@ -88,7 +88,51 @@ test_reverse_suffix_proofs :: proc(t: ^testing.T) {
 	testing.expect(t, !reverse_suffix_has_no_earlier_match(parse_default(`[a-c][^\n]*xz|z`), transmute([]u8)string("z")))
 	// the separator proof: \s+ is disjoint from \w and from "Holmes" (prefix.rs's own example)
 	testing.expect(t, reverse_suffix_has_no_earlier_match(parse_default(`\w+\s+Holmes`), transmute([]u8)string("Holmes")))
-	// conservative: [A-Z] can hold the E of "Error", [a-z]+ its r and o, so no proof holds
-	// (safe in fact; regex-automata 0.4.18 and ripgrep 16.0.0 also refuse it)
-	testing.expect(t, !reverse_suffix_has_no_earlier_match(parse_default(`[A-Z][a-z]+Error`), transmute([]u8)string("Error")))
+	// regex 1.13.1's proofs refuse it ([A-Z] can hold the E of "Error", [a-z]+ its r and o;
+	// regex-automata 0.4.18 and ripgrep 16.0.0 refuse it too). grepper's first byte proof
+	// (P8): past the one byte [A-Z] consumes, only [a-z]+ is left, and it cannot consume 'E'
+	testing.expect(t, prefix_rest_cannot_start_literal(must_strip(t, `[A-Z][a-z]+Error`, "Error"), transmute([]u8)string("Error")))
+	testing.expect(t, reverse_suffix_has_no_earlier_match(parse_default(`[A-Z][a-z]+Error`), transmute([]u8)string("Error")))
+}
+
+@(private="file")
+must_strip :: proc(t: ^testing.T, pattern, suffix: string, loc := #caller_location) -> ^Hir {
+	p, ok := strip_literal_suffix(parse_default(pattern), transmute([]u8)suffix)
+	testing.expectf(t, ok, "strip %q from %q", suffix, pattern, loc = loc)
+	return p
+}
+
+@(private="file")
+check_earlier :: proc(t: ^testing.T, yes: bool, pattern, suffix: string, loc := #caller_location) {
+	got := reverse_suffix_has_no_earlier_match(parse_default(pattern), transmute([]u8)suffix)
+	testing.expectf(t, got == yes, "no earlier match than %q's candidates in %q: want %v", suffix, pattern, yes, loc = loc)
+}
+
+// grepper's proofs past regex 1.13.1's (P8)
+@(test)
+test_reverse_suffix_proofs_p8 :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	defer virtual.arena_destroy(&arena)
+	// the first consuming child takes exactly one byte, and what follows cannot take the
+	// literal's first byte
+	check_earlier(t, true, `[A-Z][a-z]+Error`, "Error")
+	check_earlier(t, true, `\b[A-Z][a-z]*Error`, "Error")
+	check_earlier(t, true, `x[b-c]+[b-c ]*aba`, "aba")
+	check_earlier(t, false, `x[a-c]+[a-c ]*aba`, "aba")
+	check_earlier(t, true, `(?:E)[a-z]+Error`, "Error")
+	// what follows can take it: [a-zE]+ holds an earlier "Error" ("XabErrorError")
+	check_earlier(t, false, `[A-Z][a-zE]+Error`, "Error")
+	// the first child takes more than one byte, so the proof's premise does not hold and it
+	// refuses (these classes happen to be safe; the premise is what the proof can show)
+	check_earlier(t, false, `[A-Z]+[a-z]+Error`, "Error")
+	check_earlier(t, false, `[A-Z]{1,2}[a-z]+Error`, "Error")
+	// a first child of one byte that might be skipped is not one
+	check_earlier(t, false, `[A-Z]?[a-zE]+Error`, "Error")
+	// a Unicode class may take a multi-byte scalar: never exactly one byte
+	check_earlier(t, false, `\p{Lu}[a-z]+Error`, "Error")
+	// the alternations of rust-lang/regex#1354 stay refused
+	check_earlier(t, false, `[a-c][^\n]*xz|z`, "z")
+	check_earlier(t, false, `a[^\n]*xz|z`, "z")
 }

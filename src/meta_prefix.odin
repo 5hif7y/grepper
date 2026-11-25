@@ -55,7 +55,34 @@ reverse_suffix_has_no_earlier_match :: proc(h: ^Hir, suffix: []u8) -> bool {
 	lits := [1][]u8{suffix}
 	if prefix_has_disjoint_class_separator(prefix, lits[:]) { return true }
 	if !prefix_hir_can_contain_literal(prefix, suffix) { return true }
+	if prefix_rest_cannot_start_literal(prefix, suffix) { return true }
 	return false
+}
+
+// grepper's own proof, past regex 1.13.1's (P8). Say the first suffix occurrence the
+// prefilter finds is [o, o + len) and the reverse scan from it reports a match M1 starting at
+// s1 <= o. An earlier match M2 starts at s2 < s1 and ends at a later occurrence, so the
+// occurrence at o begins inside M2's prefix part (if it reached into M2's own suffix, its
+// first bytes would still be in the prefix part), at o - s2 >= 1 bytes from M2's start. When
+// the prefix's first consuming child consumes exactly one byte, the bytes of the prefix part
+// past the first are consumed by the children after it; if none of them can consume
+// suffix[0], no such M2 exists. For [A-Z][a-z]+Error: [a-z]+ cannot consume 'E'.
+prefix_rest_cannot_start_literal :: proc(prefix: ^Hir, suffix: []u8) -> bool {
+	top := uncapture(prefix)
+	if top.kind != .Concat { return false }
+	hirs := top.subs[:]
+	first := -1
+	for h, i in hirs {
+		if !matches_empty_only(h) { first = i; break }
+	}
+	if first < 0 { return false }
+	mn, ok1 := hirs[first].props.minimum_len.?
+	mx, ok2 := hirs[first].props.maximum_len.?
+	if !ok1 || !ok2 || mn != 1 || mx != 1 { return false }
+	for h in hirs[first + 1:] {
+		if hir_can_consume_byte(h, suffix[0]) { return false }
+	}
+	return true
 }
 
 // hir with suffix removed from its end; not ok when the structure does not make that

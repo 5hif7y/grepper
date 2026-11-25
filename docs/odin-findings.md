@@ -66,3 +66,15 @@ parallel walk's stack, `perf trace -s` counted ~6,700 futex calls over `/usr/inc
 (`src/walk.odin`, a66f938): 1,517 calls, 5-7 % less wall time with 4 threads. A cost, not a
 wrong result: glibc's `pthread_cond_signal` returns early when no thread waits, but Rust's
 futex `Condvar::notify_one` does not either, so it may be a deliberate trade.
+
+## 8. `resize` on a dynamic array sets its capacity to the new length
+
+`_resize_dynamic_array` (`base/runtime/core_builtin.odin`) reallocates to exactly `length`
+when the array has to grow, and sets `cap = length`; only `append` doubles. A table grown
+one row at a time with `resize` therefore reallocates in full on every row: quadratic bytes
+copied. On Linux glibc's `realloc` moves large blocks with `mremap`, so it barely shows; on
+Windows `HeapReAlloc` copies them. The lazy DFA grew its transition table that way:
+`-c 'Holmes.{0,40}Watson'` over the 524 MiB file took 12,428 ms on Windows (rg 779), 718 ms
+once the capacity doubles (`src/regex_dfa.odin`). The documented contract ("possibly
+`cap`") allows it, so it is a cost to know, not a wrong result; grepper reserves with
+doubling before such a `resize`.

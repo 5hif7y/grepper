@@ -465,7 +465,7 @@ earliest :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
 // search_half_nofail: the PikeVM's end of the leftmost-first match
 @(private="file")
 pike_end :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
-	if !pike_search(m.nfa, &m.cache, hay, start, len(hay), false, m.slots) { return }
+	if !pike_search(m.nfa, &m.cache, hay, start, len(hay), false, m.slots, earliest = true) { return }
 	return m.slots[1], true
 }
 
@@ -478,7 +478,7 @@ core_earliest :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool
 	case .No_Match: return 0, false
 	case .Quit:
 	}
-	if !pike_search(m.nfa, &m.cache, hay, start, len(hay), false, m.slots) { return }
+	if !pike_search(m.nfa, &m.cache, hay, start, len(hay), false, m.slots, earliest = true) { return }
 	return m.slots[1], true
 }
 

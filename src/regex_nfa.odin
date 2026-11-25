@@ -826,8 +826,9 @@ epsilon_closure :: proc(n: ^Rx_NFA, c: ^Pike_Cache, list: ^Pike_List, sid: i32, 
 }
 
 // the leftmost-first match in h[start:end) (look-around sees all of h); slots get the
-// capture positions (slots[0], slots[1] the match)
-pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchored: bool, slots: []int) -> bool {
+// capture positions (slots[0], slots[1] the match). earliest: stop at the first match state
+// reached (Input::earliest), whose end is all the caller needs
+pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchored: bool, slots: []int, earliest := false) -> bool {
 	pike_lists(n, c)
 	ns := n.slots
 	prog := &n.prog
@@ -884,6 +885,7 @@ pike_search :: proc(n: ^Rx_NFA, c: ^Pike_Cache, h: []u8, start, end: int, anchor
 			if s.kind == .Match { break }      // lower priority threads are cut
 			if next >= 0 { epsilon_closure(n, c, &c.next, next, tptr, ns, raw_data(h), len(h), at + 1) }
 		}
+		if earliest && matched { break }
 		c.curr, c.next = c.next, c.curr
 		if c.curr.len == 0 && matched { break }
 	}

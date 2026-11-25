@@ -49,7 +49,7 @@ prefix_has_disjoint_class_separator :: proc(prefix: ^Hir, literals: [][]u8) -> b
 // prefix left has a fixed length, or a class separator, or cannot contain the suffix
 reverse_suffix_has_no_earlier_match :: proc(h: ^Hir, suffix: []u8) -> bool {
 	if len(suffix) == 0 { return false }
-	prefix, ok := strip_literal_suffix(h, suffix)
+	prefix, ok := strip_literal_suffix(drop_trailing_empty(h), suffix)
 	if !ok { return false }
 	if prefix_hir_has_fixed_length(prefix) { return true }
 	lits := [1][]u8{suffix}
@@ -83,6 +83,20 @@ prefix_rest_cannot_start_literal :: proc(prefix: ^Hir, suffix: []u8) -> bool {
 		if hir_can_consume_byte(h, suffix[0]) { return false }
 	}
 	return true
+}
+
+// hir without the zero-width children (look-around) at the end of its top-level
+// concatenation: strip_literal_suffix stops at them, and the proofs are about the bytes a
+// match consumes, which an assertion after the literal does not change (\s+Watson\b strips
+// to \s+ as \s+Watson does). grepper's own, past regex 1.13.1 (P8)
+@(private="file")
+drop_trailing_empty :: proc(h: ^Hir) -> ^Hir {
+	top := uncapture(h)
+	if top.kind != .Concat { return h }
+	n := len(top.subs)
+	for n > 0 && matches_empty_only(top.subs[n - 1]) { n -= 1 }
+	if n == len(top.subs) || n == 0 { return h }
+	return hir_concat(top.subs[:n])
 }
 
 // hir with suffix removed from its end; not ok when the structure does not make that

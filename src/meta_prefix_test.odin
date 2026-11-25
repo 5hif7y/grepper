@@ -135,4 +135,10 @@ test_reverse_suffix_proofs_p8 :: proc(t: ^testing.T) {
 	// the alternations of rust-lang/regex#1354 stay refused
 	check_earlier(t, false, `[a-c][^\n]*xz|z`, "z")
 	check_earlier(t, false, `a[^\n]*xz|z`, "z")
+	// a trailing look is dropped before stripping: \s+Watson\b proves as \s+Watson
+	check_earlier(t, true, `\s+Watson\b`, "Watson")
+	check_earlier(t, true, `\s+Watson(?m:$)`, "Watson")
+	check_earlier(t, true, `[A-Z][a-z]+Error\b`, "Error")
+	// and the proofs still decide: [^\n]* can hold "Watson"
+	check_earlier(t, false, `[^\n]*Watson\b`, "Watson")
 }

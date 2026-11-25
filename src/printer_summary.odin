@@ -77,7 +77,8 @@ summary_matched :: proc(s: ^Summary_Sink, searcher: ^Searcher, mat: ^Sink_Match)
 
 summary_begin :: proc(s: ^Summary_Sink, searcher: ^Searcher) -> bool {
 	out_reset_count(&s.p.out)
-	s.start = time.tick_now()
+	// the clock only when the stats are kept (summary_finish reads it under has_stats)
+	if s.has_stats { s.start = time.tick_now() }
 	s.match_count = 0
 	s.binary_byte_offset = nil
 	if limit, ok := s.p.config.max_matches.?; ok && limit == 0 { return false }

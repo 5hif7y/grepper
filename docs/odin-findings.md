@@ -39,3 +39,30 @@ grepper checks each line alone and never searches a buffer in multiline mode
 
 This is a cost, not a wrong result. grepper lists directories itself on Windows
 (`src/dir_windows.odin`).
+
+## 5. `os.read_directory` on Unix stats every entry
+
+The same on Linux: each entry gets a stat, though `readdir` already gives its type
+(`d_type`). `--files` over `/usr/share` (26,398 files, WSL Arch) took 352 ms, against 96 ms
+with `opendir`/`readdir` alone (rg -j1: 75 ms). A cost, not a wrong result. grepper lists
+directories itself on Unix (`src/dir_other.odin`, bfba3b0), and stats an entry only when
+`d_type` is unknown or `--max-filesize` needs the size.
+
+## 6. `os.open` on Linux reads the file's name back from `/proc`
+
+`_open` ends in `_new_file`, which allocates a `File` and fills its name with
+`_get_full_path`: a `readlink("/proc/self/fd/N")` on every open (`core/os/file_linux.odin`).
+A search of `/usr/include` (8,903 files) made 8,904 of them; rg makes none. On WSL they are
+costly: `/usr/share -j1 -F zq_never_here_7` went from 349 to 222 ms (minimum of 15) once
+grepper opened its files with `open(2)` itself (`src/mmap_other.odin`, 5243715). It may be a
+design choice, since the name is part of `File`; a cost, not a wrong result.
+
+## 7. `sync.cond_signal` makes a futex syscall on every call
+
+`atomic_cond_signal` adds to the condition's state and calls `futex_signal` whether or not a
+thread waits (`core/sync/primitives_atomic.odin`). With every walked file pushed on the
+parallel walk's stack, `perf trace -s` counted ~6,700 futex calls over `/usr/include` (rg:
+~115). grepper counts its waiters under the lock and signals only when one waits
+(`src/walk.odin`, a66f938): 1,517 calls, 5-7 % less wall time with 4 threads. A cost, not a
+wrong result: glibc's `pthread_cond_signal` returns early when no thread waits, but Rust's
+futex `Condvar::notify_one` does not either, so it may be a deliberate trade.

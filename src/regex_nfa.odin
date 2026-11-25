@@ -266,25 +266,181 @@ c_class :: proc(n: ^Rx_NFA, cls: Hir_Class) -> Rx_Ref {
 		for r in cls.ranges { append(&s.trans, Rx_Trans{u8(r.lo), u8(r.hi), end}) }
 		return {add_state(n, s), end}
 	}
-	// a Unicode class: an alternation of its UTF-8 sequences (disjoint, so their order
-	// does not matter)
+	// a Unicode class: its UTF-8 sequences, compressed as regex-automata compiles them. The
+	// naive alternation of every sequence made Unicode \w ~3000 states, one Union whose
+	// closure walks them all at each position (upstream measures 283 states compressed, and
+	// a PikeVM search 45 s -> 1.4 s)
 	seqs: [dynamic]Utf8_Sequence
 	defer delete(seqs)
 	for r in cls.ranges { utf8_sequences(r.lo, r.hi, &seqs) }
-	u := add_state(n, {kind = .Union})
-	for seq in seqs {
-		prev: i32 = -1
-		first: i32 = -1
-		for j in 0 ..< seq.n {
-			k := seq.n - 1 - j if n.reverse else j
-			id := add_state(n, {kind = .Range, lo = seq.ranges[k].lo, hi = seq.ranges[k].hi})
-			if first < 0 { first = id } else { patch(n, prev, id) }
-			prev = id
+	// (the `end` made above, for the ASCII path, stays unreachable here)
+	if n.reverse { return c_class_reverse(n, seqs[:]) }
+	return utf8_compile(n, seqs[:])
+}
+
+// Utf8BoundedMap and Utf8SuffixMap: a fixed number of entries, hashed with FNV-1a, a new
+// entry replacing whatever collided with it, all dropped at once by bumping the version
+UTF8_FNV_PRIME :: u64(1099511628211)
+UTF8_FNV_INIT :: u64(14695981039346656037)
+
+@(private="file")
+Utf8_Bounded_Entry :: struct {
+	version: u16,
+	key:     [dynamic]Rx_Trans,
+	val:     i32,
+}
+
+@(private="file")
+Utf8_Suffix_Entry :: struct {
+	version:     u16,
+	from:        i32,
+	lo, hi:      u8,
+	val:         i32,
+}
+
+// one per thread: compiling an NFA builds no state shared with another thread
+@(private="file", thread_local) utf8_compiled: [dynamic]Utf8_Bounded_Entry
+@(private="file", thread_local) utf8_compiled_version: u16
+@(private="file", thread_local) utf8_suffix: [dynamic]Utf8_Suffix_Entry
+@(private="file", thread_local) utf8_suffix_version: u16
+
+@(private="file")
+Utf8_Node :: struct {
+	trans:    [dynamic]Rx_Trans,
+	has_last: bool,
+	last:     Utf8_Range,
+}
+
+// regex-automata's Utf8Compiler: Daciuk's incremental construction of a (near) minimal
+// automaton from sequences in lexicographic order, as Utf8Sequences gives them. A stack of
+// uncompiled nodes holds the current sequence's path; when the next sequence leaves it, the
+// nodes past the shared prefix are frozen bottom-up into Sparse states, an equal state
+// compiled before (the bounded map) reused instead of added
+@(private="file")
+utf8_compile :: proc(n: ^Rx_NFA, seqs: []Utf8_Sequence) -> Rx_Ref {
+	if len(utf8_compiled) == 0 {
+		resize(&utf8_compiled, 10_000)
+	} else {
+		utf8_compiled_version += 1
+		if utf8_compiled_version == 0 {
+			for &e in utf8_compiled { e.version = 0 }
+			utf8_compiled_version = 1
 		}
-		patch(n, prev, end)
-		patch(n, u, first)
 	}
-	return {u, end}
+	target := add_empty(n)
+	uncompiled: [dynamic]Utf8_Node
+	defer {
+		for &u in uncompiled { delete(u.trans) }
+		delete(uncompiled)
+	}
+	append(&uncompiled, Utf8_Node{})
+	compile :: proc(n: ^Rx_NFA, trans: [dynamic]Rx_Trans) -> i32 {
+		h := UTF8_FNV_INIT
+		for t in trans {
+			h = (h ~ u64(t.lo)) * UTF8_FNV_PRIME
+			h = (h ~ u64(t.hi)) * UTF8_FNV_PRIME
+			h = (h ~ u64(u32(t.next))) * UTF8_FNV_PRIME
+		}
+		e := &utf8_compiled[h % u64(len(utf8_compiled))]
+		if e.version == utf8_compiled_version && slice_equal_trans(e.key[:], trans[:]) {
+			delete(trans)
+			return e.val
+		}
+		id := add_state(n, {kind = .Sparse, trans = slice_clone_dyn(trans[:])})
+		delete(e.key)
+		e^ = {version = utf8_compiled_version, key = trans, val = id}
+		return id
+	}
+	// the node's pending last transition, frozen to point at next
+	freeze :: proc(u: ^Utf8_Node, next: i32) {
+		if u.has_last {
+			append(&u.trans, Rx_Trans{u.last.lo, u.last.hi, next})
+			u.has_last = false
+		}
+	}
+	compile_from :: proc(n: ^Rx_NFA, uncompiled: ^[dynamic]Utf8_Node, target: i32, from: int) {
+		next := target
+		for from + 1 < len(uncompiled) {
+			u := pop(uncompiled)
+			freeze(&u, next)
+			next = compile(n, u.trans)
+		}
+		freeze(&uncompiled[len(uncompiled) - 1], next)
+	}
+	for &seq in seqs {
+		ranges := seq.ranges[:seq.n]
+		prefix := 0
+		for prefix < len(ranges) && prefix < len(uncompiled) {
+			u := &uncompiled[prefix]
+			if !u.has_last || u.last != ranges[prefix] { break }
+			prefix += 1
+		}
+		assert(prefix < len(ranges), "UTF-8 sequences must be sorted and distinct")
+		compile_from(n, &uncompiled, target, prefix)
+		// add_suffix: the part of the sequence past the shared prefix
+		suffix := ranges[prefix:]
+		last := &uncompiled[len(uncompiled) - 1]
+		assert(!last.has_last)
+		last.has_last, last.last = true, suffix[0]
+		for r in suffix[1:] { append(&uncompiled, Utf8_Node{has_last = true, last = r}) }
+	}
+	compile_from(n, &uncompiled, target, 0)
+	assert(len(uncompiled) == 1 && !uncompiled[0].has_last)
+	root := uncompiled[0].trans
+	uncompiled[0].trans = {}
+	return {compile(n, root), target}
+}
+
+// c_unicode_class_reverse_with_suffix (the meta engine builds its reverse NFAs with
+// shrink(false)): each sequence read backwards, as a chain of Range states into one end, a
+// chain step already built for the same (next, range) reused (Utf8SuffixMap, 1000 entries)
+@(private="file")
+c_class_reverse :: proc(n: ^Rx_NFA, seqs: []Utf8_Sequence) -> Rx_Ref {
+	if len(utf8_suffix) == 0 {
+		resize(&utf8_suffix, 1000)
+	} else {
+		utf8_suffix_version += 1
+		if utf8_suffix_version == 0 {
+			for &e in utf8_suffix { e.version = 0 }
+			utf8_suffix_version = 1
+		}
+	}
+	u := add_state(n, {kind = .Union})
+	alt_end := add_empty(n)
+	for &seq in seqs {
+		end := alt_end
+		for r in seq.ranges[:seq.n] {
+			h := UTF8_FNV_INIT
+			h = (h ~ u64(u32(end))) * UTF8_FNV_PRIME
+			h = (h ~ u64(r.lo)) * UTF8_FNV_PRIME
+			h = (h ~ u64(r.hi)) * UTF8_FNV_PRIME
+			e := &utf8_suffix[h % u64(len(utf8_suffix))]
+			if e.version == utf8_suffix_version && e.from == end && e.lo == r.lo && e.hi == r.hi {
+				end = e.val
+				continue
+			}
+			id := add_state(n, {kind = .Range, lo = r.lo, hi = r.hi, next = end})
+			e^ = {version = utf8_suffix_version, from = end, lo = r.lo, hi = r.hi, val = id}
+			end = id
+		}
+		patch(n, u, end)
+	}
+	return {u, alt_end}
+}
+
+@(private="file")
+slice_equal_trans :: proc(a, b: []Rx_Trans) -> bool {
+	if len(a) != len(b) { return false }
+	for x, i in a {
+		if x != b[i] { return false }
+	}
+	return true
+}
+
+@(private="file")
+slice_clone_dyn :: proc(a: []Rx_Trans) -> (d: [dynamic]Rx_Trans) {
+	append(&d, ..a)
+	return
 }
 
 // greedy unions try the expression first; lazy ones (union_reverse) the exit first

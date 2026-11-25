@@ -39,11 +39,14 @@ def main():
         pats_path = os.path.join(tmp, "pats.txt")
         hay_path = os.path.join(tmp, "hay.txt")
         for k in range(a.n):
-            alphabet = rnd.choice(["ab", "abc", "abcd", "abcdefgh"])
-            size = rnd.choice([70, 100, 250, 400, 3000, 3500])
+            alphabet = rnd.choice(["ab", "abc", "abcd", "abcdefgh", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"])
+            size = rnd.choice([70, 100, 250, 400, 600, 3000, 3500])
+            # short patterns cut the trie (leftmost-first adds nothing past a match), so some
+            # sets start at 3 bytes to reach the deep, sparse states
+            lo = rnd.choice([1, 1, 3])
             pats = []
             for _ in range(size):
-                pats.append("".join(rnd.choice(alphabet) for _ in range(rnd.randint(1, 9))))
+                pats.append("".join(rnd.choice(alphabet) for _ in range(rnd.randint(lo, 9))))
             if rnd.random() < 0.3:
                 rnd.shuffle(pats)
             lines = ["".join(rnd.choice(alphabet + " ") for _ in range(rnd.randint(0, 60))) for _ in range(rnd.randint(1, 40))]

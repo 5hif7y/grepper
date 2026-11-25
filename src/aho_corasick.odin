@@ -48,7 +48,26 @@ Aho :: struct {
 	// -(offset + 1), and the dead state is AC_DFA_DEAD, so the hot loop tests one sign
 	dfa:      []i32,             // nil: search the NFA
 	dfa_pid:  []i32,             // the first pattern each state matches, or -1
+	// AhoCorasickKind::ContiguousNFA, which regex-automata picks past 500 patterns
+	// (nfa/contiguous.rs): every state in one array of u32, addressed by its offset, its
+	// transitions over byte classes. A state is [kind, fail, ...]: kind AC_KIND_DENSE then
+	// one target per class; AC_KIND_ONE (class in bits 8-15) then one target; else kind is
+	// the number of sparse transitions, then their classes four to a u32, then the targets.
+	// A match state ends with its pattern, high bit set. The dead state is at offset 0, the
+	// match states follow it, then the start state: is_special is sid <= c_max_special
+	contig:        []u32,        // nil: no contiguous NFA
+	classes:       [256]u8,
+	alphabet:      int,
+	c_start:       u32,
+	c_max_match:   u32,
+	c_max_special: u32,
 }
+
+AC_KIND_DENSE :: u32(0xFF)
+AC_KIND_ONE :: u32(0xFE)
+AC_MAX_SPARSE :: 127
+// contiguous::Builder's dense_depth (the noncontiguous one's is 3)
+AC_CONTIG_DENSE_DEPTH :: 2
 
 AC_DFA_DEAD :: min(i32)
 
@@ -173,8 +192,118 @@ aho_build :: proc(patterns: [][]u8) -> (a: ^Aho, ok: bool) {
 			}
 		}
 	}
-	if len(patterns) <= AC_DFA_MAX_PATTERNS { ac_build_dfa(a, queue[:]) }
+	if len(patterns) <= AC_DFA_MAX_PATTERNS {
+		ac_build_dfa(a, queue[:])
+	} else {
+		ac_build_contiguous(a, patterns)
+	}
 	return a, true
+}
+
+// build_from_noncontiguous. The byte classes are the noncontiguous NFA's: every byte a
+// pattern uses is a class of its own (ByteClassSet::set_range(b, b) for each trie byte),
+// the bytes between them share one
+@(private="file")
+ac_build_contiguous :: proc(a: ^Aho, patterns: [][]u8) {
+	boundary: [256]bool
+	for pat in patterns {
+		for b in pat {
+			if b > 0 { boundary[b - 1] = true }
+			boundary[b] = true
+		}
+	}
+	class := 0
+	for b in 0 ..< 256 {
+		a.classes[b] = u8(class)
+		if boundary[b] && b < 255 { class += 1 }
+	}
+	a.alphabet = class + 1
+	// the order: the dead state, the match states, the start state, the rest
+	n := len(a.states)
+	order := make([dynamic]i32, 0, n)
+	defer delete(order)
+	append(&order, AC_DEAD)
+	for st, sid in a.states {
+		if sid > int(AC_FAIL) && st.pid >= 0 { append(&order, i32(sid)) }
+	}
+	n_match := len(order) - 1
+	if a.states[AC_START].pid < 0 { append(&order, AC_START) }
+	for st, sid in a.states {
+		if sid > int(AC_FAIL) && sid != int(AC_START) && st.pid < 0 { append(&order, i32(sid)) }
+	}
+	old_to_new := make([]u32, n)
+	defer delete(old_to_new)
+	old_to_new[AC_FAIL] = u32(AC_FAIL)
+	repr: [dynamic]u32
+	for sid in order {
+		st := &a.states[sid]
+		old_to_new[sid] = u32(len(repr))
+		ntrans := len(st.sparse)
+		if sid == AC_DEAD { ntrans = 0 }
+		switch {
+		case sid == AC_DEAD || st.depth < AC_CONTIG_DENSE_DEPTH || ntrans > AC_MAX_SPARSE:
+			append(&repr, AC_KIND_DENSE, u32(st.fail))
+			row := len(repr)
+			fill := u32(AC_DEAD) if sid == AC_DEAD else u32(AC_FAIL)
+			for _ in 0 ..< a.alphabet { append(&repr, fill) }
+			if sid != AC_DEAD {
+				for t in st.sparse { repr[row + int(a.classes[t.b])] = u32(t.next) }
+			}
+		case ntrans == 1 && st.pid < 0:
+			t := st.sparse[0]
+			append(&repr, AC_KIND_ONE | u32(a.classes[t.b]) << 8, u32(st.fail), u32(t.next))
+		case:
+			append(&repr, u32(ntrans), u32(st.fail))
+			// the classes four to a u32; the last chunk repeats its last class, which can
+			// never be reached there since the same class came first
+			for i := 0; i < ntrans; i += 4 {
+				chunk: [4]u8
+				for k in 0 ..< 4 {
+					j := min(i + k, ntrans - 1)
+					chunk[k] = a.classes[st.sparse[j].b]
+				}
+				append(&repr, transmute(u32)chunk)
+			}
+			for t in st.sparse { append(&repr, u32(t.next)) }
+		}
+		if st.pid >= 0 { append(&repr, (1 << 31) | u32(st.pid)) }
+	}
+	// remap the targets from state ids to offsets
+	for sid in order {
+		o := int(old_to_new[sid])
+		kind := repr[o] & 0xFF
+		repr[o + 1] = old_to_new[repr[o + 1]]
+		lo, hi: int
+		switch kind {
+		case AC_KIND_DENSE: lo, hi = o + 2, o + 2 + a.alphabet
+		case AC_KIND_ONE:   lo, hi = o + 2, o + 3
+		case:
+			nt := int(kind)
+			lo = o + 2 + (nt + 3) / 4
+			hi = lo + nt
+		}
+		for k in lo ..< hi { repr[k] = old_to_new[repr[k]] }
+	}
+	a.contig = repr[:]
+	a.c_start = old_to_new[AC_START]
+	a.c_max_match = old_to_new[order[n_match]] if n_match > 0 else 0
+	a.c_max_special = max(a.c_start, a.c_max_match)
+}
+
+// the pattern a contiguous match state matches
+@(private="file")
+ac_contig_pid :: #force_inline proc(a: ^Aho, sid: u32) -> i32 {
+	repr := a.contig
+	o := int(sid)
+	kind := repr[o] & 0xFF
+	at: int
+	if kind == AC_KIND_DENSE {
+		at = o + 2 + a.alphabet
+	} else {
+		nt := int(kind)
+		at = o + 2 + (nt + 3) / 4 + nt
+	}
+	return i32(repr[at] & ~u32(1 << 31))
 }
 
 // the DFA's rows in breadth-first order (the dead state, the start state, then the order the
@@ -228,6 +357,47 @@ aho_find :: proc(a: ^Aho, h: []u8, start, end: int) -> (r: Range, ok: bool) {
 		if mat.start < 0 { return }
 		return mat, true
 	}
+	if a.contig != nil {
+		repr := a.contig
+		sid := a.c_start
+		#no_bounds_check for at := start; at < end; at += 1 {
+			class := u32(a.classes[h[at]])
+			// next_state: the state's own transition, else its failure's
+			next: for {
+				o := int(sid)
+				kind := repr[o] & 0xFF
+				if kind == AC_KIND_DENSE {
+					t := repr[o + 2 + int(class)]
+					if t != u32(AC_FAIL) { sid = t; break next }
+				} else if kind == AC_KIND_ONE {
+					if class == (repr[o] >> 8) & 0xFF { sid = repr[o + 2]; break next }
+				} else {
+					nt := int(kind)
+					nc := (nt + 3) / 4
+					trans := o + 2 + nc
+					for i in 0 ..< nc {
+						c := transmute([4]u8)repr[o + 2 + i]
+						if u32(c[0]) == class { sid = repr[trans + i * 4]; break next }
+						if u32(c[1]) == class { sid = repr[trans + i * 4 + 1]; break next }
+						if u32(c[2]) == class { sid = repr[trans + i * 4 + 2]; break next }
+						if u32(c[3]) == class { sid = repr[trans + i * 4 + 3]; break next }
+					}
+				}
+				sid = repr[o + 1]
+			}
+			if sid <= a.c_max_special {
+				if sid == u32(AC_DEAD) { break }
+				if sid <= a.c_max_match {
+					pid := ac_contig_pid(a, sid)
+					mat = {at + 1 - a.lens[pid], at + 1}
+				}
+			}
+		}
+		if mat.start < 0 { return }
+		return mat, true
+	}
+	// the noncontiguous NFA's search, which every set now leaves to the DFA or the
+	// contiguous NFA (kept as the reference they were checked against)
 	#no_bounds_check for at := start; at < end; at += 1 {
 		b := h[at]
 		for {

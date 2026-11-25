@@ -11,7 +11,7 @@ Matcher_Kind :: enum { Empty, Literal, Literals, Pike }
 
 // regex-automata's meta strategy over the Core engines (meta/strategy.rs::new), tried in this
 // order: the reverse anchored, reverse suffix and reverse inner searches, else Core
-Meta_Strategy :: enum { Core, Reverse_Anchored }
+Meta_Strategy :: enum { Core, Reverse_Anchored, Reverse_Suffix }
 
 Matcher :: struct {
 	kind:     Matcher_Kind,
@@ -40,12 +40,14 @@ Matcher :: struct {
 	// find a candidate line, which the regex then confirms (nil: none)
 	fast_line: ^Prefilter,
 	strategy:  Meta_Strategy,
+	suffix_pre: ^Prefilter,   // ReverseSuffix: the longest common suffix's prefilter
 }
 
 // a worker's own copy: the memmem finders and the PikeVM's scratch change while searching
 matcher_clone :: proc(m: Matcher) -> (c: Matcher) {
 	c = m
 	c.fast_line = prefilter_clone(m.fast_line)
+	c.suffix_pre = prefilter_clone(m.suffix_pre)
 	if m.finders != nil {
 		c.finders = make([]nvol.Memmem_Finder, len(m.finders))
 		copy(c.finders, m.finders)
@@ -159,7 +161,27 @@ matcher_pike :: proc(h: ^Hir, pre: ^Prefilter) -> (m: Matcher) {
 	// DFAs are always there
 	if look_set_contains(h.props.look_set_suffix, .End) && !anchored_start {
 		m.strategy = .Reverse_Anchored
+		return
 	}
+	if anchored_start { return }
+	// ReverseSuffix::new: unless the prefix prefilter is already fast, the longest common
+	// suffix of the regex's suffixes (leftmost-first), when it is not empty and its own
+	// prefilter is fast
+	if pre != nil && prefilter_is_fast(pre) { return }
+	e := extractor_new(.Suffix)
+	suffixes := extractor_extract(&e, h)
+	seq_optimize_for_suffix_by_preference(&suffixes)
+	lcs, has := seq_longest_common_suffix(suffixes)
+	if !has || len(lcs) == 0 { return }
+	needles := make([][]u8, 1)
+	needles[0] = lcs
+	sp, built := prefilter_new(needles)
+	if !built || !prefilter_is_fast(sp) { return }
+	// regex 1.13.1's fix (meta_prefix.odin): only when no earlier match can end at a later
+	// occurrence of the suffix
+	if !reverse_suffix_has_no_earlier_match(h, lcs) { return }
+	m.strategy = .Reverse_Suffix
+	m.suffix_pre = sp
 	return
 }
 
@@ -192,8 +214,41 @@ find_strategy :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok
 		case .No_Match: return
 		case .Quit: return core_slots(m, hay, start, end)
 		}
+	case .Reverse_Suffix:
+		ms, r, quadratic := suffix_start(m, hay[:end], start, end)
+		if quadratic { return core_find(m, hay, start, end) }
+		switch r {
+		case .No_Match: return
+		case .Quit: return core_slots(m, hay, start, end)
+		case .Match:
+		}
+		// the suffix found need not end the leftmost-first match (/[a-z]+ing/ on
+		// "tingling"): the forward DFA, anchored at the start, finds its end
+		me, fr := dfa_find_fwd(&m.dfa_fwd, hay[:end], ms, end, anchored = true)
+		switch fr {
+		case .Match: return ms, me, true
+		case .Quit: return core_slots(m, hay, start, end)
+		case .No_Match: panic("a suffix match and a reverse match imply a match")
+		}
 	}
 	unreachable()
+}
+
+// ReverseSuffix::try_search_half_start: each occurrence of the suffix, in order, with the
+// reverse DFA run anchored at its end for the leftmost start of a match ending there; the
+// reverse scans stop at the previous occurrence's end, or the search gives up (quadratic)
+@(private="file")
+suffix_start :: proc(m: ^Matcher, h: []u8, start, end: int) -> (at: int, r: Dfa_Result, quadratic: bool) {
+	from := start
+	min_start := 0
+	for {
+		lit := prefilter_find(m.suffix_pre, h, from, end) or_return
+		at, r, quadratic = dfa_find_rev_limited(&m.dfa_rev, h, start, lit.end, min_start)
+		if quadratic || r != .No_Match { return }
+		if from >= end { return 0, .No_Match, false }
+		from = lit.start + 1
+		min_start = lit.end
+	}
 }
 
 // Strategy::search_slots: with a strategy other than Core, its match narrows the span and
@@ -233,6 +288,20 @@ earliest :: proc(m: ^Matcher, hay: []u8, start: int) -> (end: int, ok: bool) {
 		case .Match: return end_, true
 		case .No_Match: return
 		case .Quit: return pike_end(m, hay, start)
+		}
+	case .Reverse_Suffix:
+		ms, r, quadratic := suffix_start(m, hay, start, end_)
+		if quadratic { return core_earliest(m, hay, start) }
+		switch r {
+		case .No_Match: return
+		case .Quit: return pike_end(m, hay, start)
+		case .Match:
+		}
+		me, fr := dfa_find_fwd(&m.dfa_fwd, hay, ms, end_, anchored = true, earliest = true)
+		switch fr {
+		case .Match: return me, true
+		case .Quit: return pike_end(m, hay, start)
+		case .No_Match: panic("a suffix match and a reverse match imply a match")
 		}
 	}
 	return core_earliest(m, hay, start)
@@ -339,15 +408,20 @@ find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
 		return s, e, best >= 0
 	case .Pike:
 		if m.strategy != .Core { return find_strategy(m, hay, start, end) }
-		// Core::search without capture groups: the lazy DFAs, and the engines with slots
-		// when they give up
-		ds, de, r := find_dfa(m, hay[:end], start, end)
-		switch r {
-		case .Match: return ds, de, true
-		case .No_Match: return
-		case .Quit:
-		}
-		return core_slots(m, hay, start, end)
+		return core_find(m, hay, start, end)
 	}
 	return
+}
+
+// Core::search without capture groups: the lazy DFAs, and the engines with slots when they
+// give up
+@(private="file")
+core_find :: proc(m: ^Matcher, hay: []u8, start, end: int) -> (s, e: int, ok: bool) {
+	ds, de, r := find_dfa(m, hay[:end], start, end)
+	switch r {
+	case .Match: return ds, de, true
+	case .No_Match: return
+	case .Quit:
+	}
+	return core_slots(m, hay, start, end)
 }

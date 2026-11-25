@@ -23,6 +23,8 @@ FILES = {
     "only_newlines.txt": b"\n\n\n",
     # more output than one 64 KiB block: on one thread it is written as the buffer fills
     "wide.txt": b"".join(b"row %05d alpha %s\n" % (i, b"x" * 40) for i in range(4000)),
+    # a match that starts before the first suffix occurrence it could end at (regex #1354)
+    "rsuffix.txt": b"a z xz\nq zz z\n",
     "long.txt": b"".join(b"line %d %s\n" % (i, b"needle" if i % 97 == 0 else b"hay") for i in range(5000)),
     "utf8.txt": "café ü naïve\nnothing\nCAFÉ\n".encode(),
     "binary.bin": b"text with alpha\x00\x01\x02 more alpha\n",
@@ -542,6 +544,14 @@ RG_BUGS = [
     # at 18 but ends at 17); the answer is rg 16.0.0's, its regression test r3180
     ("multiline replace past the range", "U3180", ["(^|[^a-z])((([a-z]+)?)\\s)?b(\\s([a-z]+)?)($|[^a-z])", "look3180.txt", "-U", "-rx"], "", False,
      (0, b"xbxbx\n")),
+    # rg 14.1.1's reverse suffix search stops at the first suffix occurrence a match ends at,
+    # though a match starting earlier ends later: it prints "z" twice for "a z xz"; the
+    # leftmost-first matches are "a z xz" and, on the second line, "z", "z" and "z"
+    # (regex 1.13.1, rust-lang/regex#1354; rg 16.0.0 agrees)
+    ("reverse suffix, earlier match", "RX1354", ["-o", "[a-c][^\\n]*xz|z", "rsuffix.txt"], "", False,
+     (0, b"a z xz\nz\nz\nz\n")),
+    ("reverse suffix, earlier match, multi line", "RX1354", ["-U", "-o", "[a-c][^\\n]*xz|z", "rsuffix.txt"], "", False,
+     (0, b"a z xz\nz\nz\nz\n")),
     # tree4's .gitignore has docs/a/b/draft*, which git applies to docs/a/b/draft1.md: rg
     # 14.1.1 drops the directories between the root and the file, matches docs/draft1.md,
     # and prints it

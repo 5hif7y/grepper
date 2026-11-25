@@ -126,6 +126,8 @@ recorded here as such.
 | Upstream | Bug | Area | Status |
 |---|---|---|---|
 | #1332 #3001 | `rg -vf file` with an empty `file` should match every line | patterns | fixed, also under `-i`/`-S`, where 16.0.0 still prints nothing |
+| regex #1354 (regex 1.13.1, regex-automata 0.4.18) | the reverse suffix (and reverse inner) search reports the first literal candidate it confirms, even when a match starting earlier ends at a later one: `rg -o '[a-c][^
+]*xz|z'` on `a z xz` prints `z` twice, where the leftmost-first match is `a z xz` (rg 16.0.0 prints `a z xz`) | regex | fixed: the strategy is used only when regex-automata 0.4.18's proofs hold (`src/meta_prefix.odin`, its unit tests in `src/meta_prefix_test.odin`); like 0.4.18 they are conservative, so `-U '[A-Z][a-z]+Error'` keeps the Core search (rg 14.1.1 800 ms, rg 16.0.0 1684 ms, grepper 1547 ms on the 524 MiB file) |
 | #2177 | a UTF-8 BOM at the start of `.gitignore` (and the other ignore files) is part of the first pattern | ignore | fixed |
 | #2944 | `--stats` "bytes searched" can be wrong | printer | fixed |
 | #2990 | globs ending in `.` are mishandled | globset | fixed |

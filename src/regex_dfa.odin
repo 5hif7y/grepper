@@ -87,6 +87,9 @@ Lazy_Dfa :: struct {
 	budget:       int,        // states before the cache is cleared
 	accel_checks: int,        // states still to check for acceleration in this cache
 	start_ids:    [Dfa_Ctx]i32, // the start state per context once built (-1: not yet)
+	// an unanchored leftmost-first DFA's anchored start states (Anchored::Pattern), for the
+	// reverse strategies' forward search from a start already found
+	start_ids_anchored: [Dfa_Ctx]i32,
 }
 
 // a leftmost-first DFA is unanchored unless the regex is anchored at the start; an All DFA
@@ -98,6 +101,7 @@ dfa_new :: proc(n: ^Rx_NFA, mode := Dfa_Mode.Earliest, unanchored := true) -> (d
 	d.nfa = n
 	d.pre = prefilter_clone(n.pre) if mode != .All else nil
 	for &x in d.start_ids { x = -1 }
+	for &x in d.start_ids_anchored { x = -1 }
 	d.mark = make([]u32, len(n.states))
 	d.budget = 4096
 	d.accel_checks = DFA_ACCEL_CHECKS
@@ -214,7 +218,16 @@ state_for :: proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, seeds: []i32, unanchored := false,
 }
 
 @(private="file")
-start_state :: #force_inline proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx) -> i32 {
+start_state :: #force_inline proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx, anchored := false) -> i32 {
+	if anchored && d.unanchored {
+		// the regex's start alone: these states never hold the unanchored prefix, so none of
+		// them is a start state the prefilter would skip from
+		if id := d.start_ids_anchored[ctx]; id >= 0 { return id }
+		seed := [1]i32{d.nfa.start}
+		id := state_for(d, ctx, seed[:])
+		d.start_ids_anchored[ctx] = id
+		return id
+	}
 	if id := d.start_ids[ctx]; id >= 0 { return id }
 	id: i32
 	if d.mode == .Earliest || d.unanchored {
@@ -231,6 +244,7 @@ start_state :: #force_inline proc(d: ^Lazy_Dfa, ctx: Dfa_Ctx) -> i32 {
 @(private="file")
 dfa_reset :: proc(d: ^Lazy_Dfa) {
 	for &x in d.start_ids { x = -1 }
+	for &x in d.start_ids_anchored { x = -1 }
 	for s in d.states { delete(s.seeds) }
 	clear(&d.states)
 	clear(&d.trans)
@@ -555,14 +569,15 @@ transition :: #force_inline proc(d: ^Lazy_Dfa, cur: ^int, next: int, accel: bool
 
 // hybrid::search::find_fwd, leftmost-first: the end of the leftmost-first match in
 // h[start:end); look-behind sees h[start-1], and h[end] (or the end of h) is the look-ahead
-// at the end
-dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa_Result) {
+// at the end. Anchored, the match must start at start (no prefilter then); earliest, the
+// first match state ends the search (Input::earliest)
+dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int, anchored := false, earliest := false) -> (at: int, r: Dfa_Result) {
 	ctx := d.start_ctx
 	if start > 0 { ctx = d.ctx_of[h[start - 1]] }
 	i := start
 	mat := -1
-	cur := int(start_state(d, ctx)) * DFA_STRIDE
-	if d.pre != nil && i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
+	cur := int(start_state(d, ctx, anchored)) * DFA_STRIDE
+	if d.pre != nil && !anchored && i < end && !prefilter_skip(d, h, &i, &cur, end) { return 0, .No_Match }
 	for i < end {
 		tbl := d.trans[:]
 		#no_bounds_check for i < end {
@@ -580,7 +595,10 @@ dfa_find_fwd :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa
 			v := int(DFA_TAG - next)
 			cur = v >> 2
 			kind := v & 3
-			if kind == 2 { mat = i }
+			if kind == 2 {
+				mat = i
+				if earliest { return mat, .Match }
+			}
 			i += 1
 			if kind == 0 {
 				if i < end && !prefilter_skip(d, h, &i, &cur, end) {
@@ -650,4 +668,52 @@ dfa_find_rev :: proc(d: ^Lazy_Dfa, h: []u8, start, end: int) -> (at: int, r: Dfa
 	}
 	if t == DFA_QUIT { return start, .Quit }
 	return mat, .Match if mat >= 0 else .No_Match
+}
+
+// meta::limited::hybrid_try_search_half_rev: dfa_find_rev, given up (quadratic) when it
+// would read a byte below min_start, the end of the previous literal match, past the first
+// byte; and when it reaches start without dying with a match that starts later, since a
+// longer match might still begin before start ("avoid potential false positive match")
+dfa_find_rev_limited :: proc(d: ^Lazy_Dfa, h: []u8, start, end, min_start: int) -> (at: int, r: Dfa_Result, quadratic: bool) {
+	ctx := d.start_ctx
+	if end < len(h) { ctx = d.ctx_of[h[end]] }
+	i := end
+	mat := -1
+	cur := int(start_state(d, ctx)) * DFA_STRIDE
+	lim := max(start, min_start)
+	for i > start {
+		if i != end && i <= min_start { return 0, .No_Match, true }
+		tbl := d.trans[:]
+		#no_bounds_check for i > lim {
+			next := tbl[cur + int(h[i - 1])]
+			if next < 0 { break }
+			cur = int(next)
+			i -= 1
+		}
+		if i <= start { break }
+		if i != end && i <= min_start { return 0, .No_Match, true }
+		next := transition(d, &cur, int(h[i - 1]), false)
+		switch {
+		case next == DFA_DEAD: return mat, .Match if mat >= 0 else .No_Match, false
+		case next == DFA_QUIT: return i, .Quit, false
+		case next <= DFA_TAG:
+			cur = int(DFA_TAG - next) >> 2
+			mat = i
+			i -= 1
+		case:
+			cur = int(next)
+			i -= 1
+		}
+	}
+	t: i32
+	if start > 0 {
+		t = transition(d, &cur, int(h[start - 1]), false)
+		if t <= DFA_TAG { mat = start }
+	} else {
+		t = transition(d, &cur, 256, false)
+		if t == DFA_MATCH { mat = start }
+	}
+	if t == DFA_QUIT { return start, .Quit, false }
+	if mat > start { return 0, .No_Match, true }
+	return mat, .Match if mat >= 0 else .No_Match, false
 }

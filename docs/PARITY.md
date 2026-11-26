@@ -234,6 +234,7 @@ since the previous list are under "Done" at the end, with their commits.
 | N1 | Odin | `os.open` on Linux fills `File.name` with readlink of `/proc/self/fd/N` on every open (`core/os/file_linux.odin`, `_new_file` -> `_get_full_path`): one syscall per file that a caller may never use (8,904 on `/usr/include`); grepper opens with `open(2)` itself (5243715) |
 | N2 | Odin | `sync.cond_signal` makes a futex syscall on every call, waiters or not (`core/sync/primitives_atomic.odin`); grepper counts its waiters (a66f938) |
 | N3 | ripgrep | B6 (the two forms of a missing root's error) and B2's race seen again (`-l alpha sub d1` loses `sub/deep/` in 41 of 100 runs at `-j4`) |
+| N4 | Odin | `resize` on a dynamic array sets its capacity to the new length, so growing a table a row at a time is quadratic on Windows (finding 8, 9196575); narrow stores followed by a wide load of the same bytes stall on store forwarding in `-o:speed` code (finding 9, 430eced). Both in `docs/odin-findings.md`, with findings 1-7, to audit before anything is reported |
 
 ### 6. Decisions
 

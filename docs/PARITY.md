@@ -36,7 +36,7 @@ Status: `done`, `partial` (what is missing is said), `todo`.
 | count every match, files without a match, zero counts | `--count-matches --files-without-match --include-zero` | done |
 | NUL after paths, path separator | `-0 --path-separator` | done |
 | field separators | `--field-match-separator --field-context-separator` | done |
-| long lines | `-M --max-columns-preview` | partial: `--max-columns-preview` needs grapheme clusters |
+| long lines | `-M --max-columns-preview` | done: the preview cuts after N grapheme clusters, bstr 1.10.0's UAX #29 regex compiled on grepper's own engine (`src/grapheme.odin`) |
 | trim leading whitespace | `--trim` | done |
 | colour specs | `--colors` | done |
 | pretty | `-p` | done |
@@ -195,7 +195,6 @@ since the previous list are under "Done" at the end, with their commits.
 
 | # | Item | Flags | NVOL |
 |---|---|---|---|
-| F1 | grapheme clusters for the preview of long lines | `--max-columns-preview` | none (Unicode tables, scalar) |
 | F2 | encodings: BOM sniffing, UTF-16 to UTF-8, the WHATWG labels encoding_rs knows | `-E` | new: UTF-16 to UTF-8 transcoding; new: full UTF-8 validation (NVOL item 36, Keiser-Lemire, also for `--json`'s text check); has: `first_non_ascii` for the ASCII fast path |
 | F3 | decompression through external tools, with #3342 (magic numbers) and #3222 (flags apart from paths) | `-z` | none |
 | F4 | preprocessors | `--pre --pre-glob` | none |
@@ -258,6 +257,7 @@ since the previous list are under "Done" at the end, with their commits.
 | P12 | closed without a change (2026-11-25): rg 14.1.1 builds a full dense DFA for regexes of up to 1000 NFA states (`dfa_size_limit` 1 MiB) and prefers it to the lazy DFA; grepper's lazy DFA is level with it on every such pattern measured (524 MiB, Windows, best of 3: `-c '[a-z]{3}[0-9]'` 1342 vs rg 1404, `-c '(?-u)[0-9]+'` 910 vs 1015, `-c '(?-u)[a-z]+@[a-z]+\.[a-z]+'` 345 vs 479; `-c '(?-u)\w+\s+\w+'` and `-o '(?-u)\w+ing'` moved between 0.53x and 1.17x of rg across three reruns, host noise; over the Research-LLOG tree 0.46-0.62x of rg). A full DFA would only remove the lazy DFA's warm-up, which no row shows | none |
 | P11 | the PikeVM laid out as regex-automata's (a slot table per NFA state, sparse scans that stop past the byte, 20-byte compact states), store forwarding stalls removed from its closure (Odin finding 9), and earliest searches stopped at the first match: `--dfa-size-limit 1K -c '\w{30}'` on 4 MiB, Linux 919 -> 354 ms (rg 303); 50 MB, Windows 9,126 -> ~4,250 (rg ~3,850); `-c '\w+ing'` 271 -> 191 (rg 190). New checks: `test_pike_slots` (PikeVM against the backtracker, slot for slot) and `regex_fuzz.py --no-lazy-dfa` | 875abfc, 181935e, 430eced, f2c0c44 |
 | P8 | two reverse suffix proofs past regex 1.13.1's: the first consuming child of the prefix takes exactly one byte and nothing after it can consume the literal's first byte (an earlier match would have the first candidate inside its prefix part, past its first byte), and trailing looks dropped before stripping. `-U -c '[A-Z][a-z]+Error'` on 524 MiB 1,394 -> 376 ms (rg 14.1.1 407 through its unsound strategy, rg 16.0.0 1,458); `[A-Z][a-z]+Error` 1,425 -> 384. `tests/reverse_proof_fuzz.py` searches for counterexamples against rg 16.0.0 (rg 14.1.1 fails it 35-37 times in 400; a proof accepting everything 1-4 times; these proofs pass 26 seeds, 10,400 patterns) | a5d3593, 76b712e |
+| F1 | `--max-columns-preview`: the first N extended grapheme clusters of a long line, then `[... omitted end of long line]` or `[... N more matches]`. bstr 1.10.0 searches a DFA generated from its UAX #29 regex (`scripts/regex/grapheme.sh`); grepper compiles the same regex on its own engine and regex-syntax 0.8.4's tables, with bstr's ASCII fast path and its lossy decode (the maximal invalid prefix is one U+FFFD). `tests/grapheme_fuzz.py` (Hangul, flags, ZWJ emoji, Prepend, SpacingMark, CR LF, invalid UTF-8) against rg 14.1.1, and rg 16.0.0 with `-r` (U3100 changes how long a replaced line is) | 30df863 |
 | survey | 25 patterns against rg on the 524 MiB file (2026-11-25): grepper ahead or level on 21. The 20x gap found (`-c 'Holmes.{0,40}Watson'` 12,428 ms vs rg 779) was the lazy DFA's table growing a row at a time with Odin's `resize`, quadratic on Windows: doubled, 718 ms (9196575; Odin finding 8) | 9196575 |
 | P9 | `tests/stress_walk.py`, the watch for P9's hang | 953f3fb |
 | P3 | accelerated lazy DFA states: `^\s*$` 1686 -> 770 ms on the 523 MiB file (rg ~820) | earlier |

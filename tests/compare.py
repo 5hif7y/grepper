@@ -25,6 +25,12 @@ FILES = {
     "wide.txt": b"".join(b"row %05d alpha %s\n" % (i, b"x" * 40) for i in range(4000)),
     # a match that starts before the first suffix occurrence it could end at (regex #1354)
     "rsuffix.txt": b"a z xz\nq zz z\n",
+    # grapheme clusters for --max-columns-preview: combining marks, a ZWJ emoji, flags,
+    # Hangul jamo, a Prepend, CR LF, whitespace (bstr's ASCII fast path skips it), invalid UTF-8
+    "graphemes.txt": "éé\U0001f469‍\U0001f4bb needle ë needle\n".encode()
+    + "flag \U0001f1fa\U0001f1f8\U0001f1e6\U0001f1fa x 각 ؀a needle\n".encode()
+    + b"ab\r\n \t abc needle\n"
+    + b"bad \xff\xe2\x82 \xf0\x9f\x91 needle\n",
     # more fixed strings than Teddy takes (64): the meta strategy's path, not a literal loop
     "many_words.txt": b"".join(b"line %d\n" % i for i in range(0, 5000, 50)),
     "long.txt": b"".join(b"line %d %s\n" % (i, b"needle" if i % 97 == 0 else b"hay") for i in range(5000)),
@@ -213,6 +219,13 @@ CASES = [
     ("max columns", ["-M", "12", "alpha", "ws.txt", "plain.txt"]),
     ("max columns only matching", ["-M", "3", "-o", "alpha", "ws.txt"]),
     ("max columns color", ["--color", "always", "-M", "12", "alpha", "ws.txt"]),
+    # --max-columns-preview: the first N grapheme clusters (bstr's UAX #29 segmentation)
+    ("max columns preview", ["-M", "5", "--max-columns-preview", "-e", "needle", "graphemes.txt"]),
+    ("max columns preview, matches", ["-M", "9", "--max-columns-preview", "--color", "always", "-e", "needle|e", "graphemes.txt"]),
+    ("max columns preview, one more match", ["-M", "2", "--max-columns-preview", "-r", "R", "-e", "c", "graphemes.txt"]),
+    ("max columns preview, only matching", ["-M", "3", "--max-columns-preview", "-o", "-e", "needle.*", "graphemes.txt"]),
+    ("max columns preview, context", ["-M", "4", "--max-columns-preview", "-C1", "-n", "-e", "flag", "graphemes.txt"]),
+    ("max columns preview, invalid utf-8", ["-M", "6", "--max-columns-preview", "-a", "-e", "bad", "graphemes.txt"]),
     ("path separator", ["-H", "--path-separator", "#", "alpha", "plain.txt"]),
     ("colors", ["--color", "always", "--colors", "match:fg:blue", "--colors", "match:style:nobold", "--colors", "line:none", "--colors", "path:bg:0x10", "--colors", "column:fg:200,1,0", "-n", "--column", "-H", "alpha", "plain.txt"]),
     ("colors intense underline", ["--color", "always", "--colors", "match:style:intense", "--colors", "match:style:underline", "--colors", "path:fg:yellow", "--colors", "path:style:intense", "-H", "alpha", "plain.txt"]),
@@ -286,8 +299,7 @@ CASES = [
     ("replace colour", ["--color", "always", "-r", "Z$0", "alpha", "plain.txt"]),
     ("replace max count", ["-m", "1", "-r", "Z", "alpha", "plain.txt"]),
     ("replace passthru", ["--passthru", "-r", "Z", "beta", "plain.txt"]),
-    ("replace max columns", ["-M", "8", "-r", "ZZZZZZZZZZ", "alpha", "plain.txt"]),
-    ("replace crlf", ["--crlf", "-r", "<$0>", "a.", "crlf.txt"]),
+    ("replace max columns", ["-M", "8", "-r", "ZZZZZZZZZZ", "alpha", "plain.txt"]),    ("replace crlf", ["--crlf", "-r", "<$0>", "a.", "crlf.txt"]),
     ("replace word", ["-w", "-r", "Z", "alpha", "words.txt"]),
     ("replace count ignores it", ["-c", "-r", "Z", "alpha", "plain.txt"]),
     ("replace json ignores it", ["--json", "-r", "Z", "beta", "plain.txt"]),

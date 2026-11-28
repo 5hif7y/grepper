@@ -93,7 +93,6 @@ unsupported :: proc(low: ^Low_Args) -> string {
 	if low.pre != "" { return "--pre" }
 	if low.engine != .Default { return "-P/--pcre2 and --engine" }
 	if low.hyperlink_format != "" { return "--hyperlink-format" }
-	if low.max_columns_preview { return "--max-columns-preview" }
 	return ""
 }
 

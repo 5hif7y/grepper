@@ -32,10 +32,11 @@ Standard_Config :: struct {
 }
 
 Standard_Printer :: struct {
-	config:   Standard_Config,
-	out:      Out,
-	matches:  [dynamic]Range,
-	replacer: Replacer,
+	config:    Standard_Config,
+	out:       Out,
+	matches:   [dynamic]Range,
+	replacer:  Replacer,
+	graphemes: ^Grapheme_Segmenter,   // built on the first preview (--max-columns-preview)
 }
 
 Standard_Sink :: struct {
@@ -506,7 +507,30 @@ std_write_colored_matches :: proc(i: ^Std_Impl, bytes: []u8, line: Range, matche
 }
 
 std_write_exceeded_line :: proc(i: ^Std_Impl, bytes: []u8, line: Range, matches: []Range, midx: ^int) {
-	// --max-columns-preview (grapheme clusters) is refused in hiargs until ported
+	if cfg(i).max_columns_preview {
+		// the line up to the end of its first max_columns grapheme clusters
+		original := line
+		if i.s.p.graphemes == nil { i.s.p.graphemes = grapheme_segmenter_new() }
+		limit := cfg(i).max_columns.? or_else 0
+		end := line.start
+		for n: u64 = 0; n < limit && end < line.end; n += 1 {
+			end += decode_grapheme(i.s.p.graphemes, bytes[end:line.end])
+		}
+		std_write_colored_matches(i, bytes, {line.start, end}, matches, midx)
+		if len(matches) == 0 {
+			ws(i, " [... omitted end of long line]")
+		} else {
+			remaining := 0
+			for m in matches {
+				if m.start >= end && m.start < original.end { remaining += 1 }
+			}
+			ws(i, " [... ")
+			out_decimal(&i.s.p.out, u64(remaining))
+			ws(i, " more match]" if remaining == 1 else " more matches]")
+		}
+		std_write_line_term(i)
+		return
+	}
 	if len(i.s.p.matches) == 0 {
 		ws(i, "[Omitted long context line]" if i.is_context else "[Omitted long matching line]")
 	} else if cfg(i).only_matching {
